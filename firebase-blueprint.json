@@ -1,0 +1,167 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile information and role.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth UID" },
+        "email": { "type": "string", "format": "email" },
+        "displayName": { "type": "string" },
+        "phoneNumber": { "type": "string" },
+        "role": { "type": "string", "enum": ["barber", "customer"] },
+        "waitlistPreference": {
+          "type": "object",
+          "properties": {
+            "dayOfWeek": { "type": "string" },
+            "preferredTime": { "type": "string" },
+            "desiredServices": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": { "type": "string" },
+                  "name": { "type": "string" },
+                  "price": { "type": "number" },
+                  "duration": { "type": "number" }
+                }
+              }
+            },
+            "isActive": { "type": "boolean" },
+            "updatedAt": { "type": "string", "format": "date-time" }
+          }
+        }
+      },
+      "required": ["uid", "email", "role"]
+    },
+    "Appointment": {
+      "title": "Appointment",
+      "description": "An appointment booking.",
+      "type": "object",
+      "properties": {
+        "customerId": { "type": "string" },
+        "services": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "name": { "type": "string" },
+              "price": { "type": "number" },
+              "duration": { "type": "number" }
+            }
+          }
+        },
+        "startTime": { "type": "string", "format": "date-time" },
+        "endTime": { "type": "string", "format": "date-time" },
+        "status": { "type": "string", "enum": ["booked", "cancelled", "completed"] },
+        "totalAmount": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "cancelledAt": { "type": "string", "format": "date-time" },
+        "isLocked": { "type": "boolean" },
+        "lockedUntil": { "type": "string", "format": "date-time" },
+        "waitlistOfferId": { "type": "string" },
+        "isForFriend": { "type": "boolean" },
+        "isManual": { "type": "boolean" },
+        "customer": {
+          "type": "object",
+          "properties": {
+            "displayName": { "type": "string" },
+            "phoneNumber": { "type": "string" },
+            "email": { "type": "string", "format": "email" }
+          }
+        },
+        "friendDetails": {
+          "type": "object",
+          "properties": {
+            "firstName": { "type": "string" },
+            "lastName": { "type": "string" },
+            "phone": { "type": "string" },
+            "email": { "type": "string", "format": "email" }
+          }
+        }
+      },
+      "required": ["customerId", "services", "startTime", "endTime", "status"]
+    },
+    "RescheduleProposal": {
+      "title": "RescheduleProposal",
+      "description": "A queue-based proposal to move appointments to an earlier slot.",
+      "type": "object",
+      "properties": {
+        "gapStartTime": { "type": "string", "format": "date-time" },
+        "gapEndTime": { "type": "string", "format": "date-time" },
+        "targets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "userId": { "type": "string" },
+              "appointmentId": { "type": "string" },
+              "status": { "type": "string", "enum": ["pending", "accepted", "declined", "expired", "waiting"] },
+              "notifiedAt": { "type": "string", "format": "date-time" },
+              "expiresAt": { "type": "string", "format": "date-time" }
+            }
+          }
+        },
+        "currentIdx": { "type": "integer" },
+        "status": { "type": "string", "enum": ["active", "completed", "cancelled"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["gapStartTime", "gapEndTime", "targets", "currentIdx", "status"]
+    },
+    "Contact": {
+      "title": "Contact",
+      "description": "Manual customer contact information for barber suggestions.",
+      "type": "object",
+      "properties": {
+        "firstName": { "type": "string" },
+        "lastName": { "type": "string" },
+        "firstNameLower": { "type": "string" },
+        "lastNameLower": { "type": "string" },
+        "phone": { "type": "string" },
+        "phonePrefix": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["firstName", "lastName", "firstNameLower", "lastNameLower", "phone"]
+    },
+    "WaitlistOffer": {
+      "title": "WaitlistOffer",
+      "description": "An offer sent to waitlist users when a slot opens up.",
+      "type": "object",
+      "properties": {
+        "appointmentId": { "type": "string" },
+        "startTime": { "type": "string", "format": "date-time" },
+        "endTime": { "type": "string", "format": "date-time" },
+        "expiresAt": { "type": "string", "format": "date-time" },
+        "status": { "type": "string", "enum": ["active", "accepted", "expired"] },
+        "acceptedBy": { "type": "string" },
+        "eligibleUserIds": { "type": "array", "items": { "type": "string" } },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["appointmentId", "startTime", "endTime", "expiresAt", "status", "eligibleUserIds", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles"
+    },
+    "/appointments/{appointmentId}": {
+      "schema": "Appointment",
+      "description": "Booking records"
+    },
+    "/rescheduleProposals/{proposalId}": {
+      "schema": "RescheduleProposal",
+      "description": "Reschedule proposals"
+    },
+    "/contacts/{contactId}": {
+      "schema": "Contact",
+      "description": "Manual customer contacts"
+    },
+    "/waitlistOffers/{offerId}": {
+      "schema": "WaitlistOffer",
+      "description": "Waitlist offers"
+    }
+  }
+}

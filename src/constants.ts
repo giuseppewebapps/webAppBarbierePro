@@ -1,0 +1,41 @@
+import { Service } from './types';
+
+export const SERVICES: Service[] = [
+  { id: 'taglio', name: 'Taglio e shampoo', price: 18, duration: 45 },
+  { id: 'barba', name: 'Taglio, shampoo e barba', price: 24, duration: 60 },
+  { id: 'shampoo', name: 'Shampoo e acconciatura', price: 10, duration: 15 },
+];
+
+export const OPENING_HOURS = [
+  { start: 8, end: 13 },
+  { start: 14, end: 20 },
+];
+
+export const CLOSED_DAYS = [0, 1]; // 0 = Sunday, 1 = Monday
+
+export const BARBER_EMAILS = [
+  'giuseppe.webapps@gmail.com',
+  'malderadomenico98@gmail.com',
+];
+
+export const COUNTRY_CODES = [
+  { code: 'IT', name: 'Italia', dial_code: '+39', flag: '🇮🇹' },
+  { code: 'US', name: 'United States', dial_code: '+1', flag: '🇺🇸' },
+  { code: 'GB', name: 'United Kingdom', dial_code: '+44', flag: '🇬🇧' },
+  { code: 'FR', name: 'Francia', dial_code: '+33', flag: '🇫🇷' },
+  { code: 'DE', name: 'Germania', dial_code: '+49', flag: '🇩🇪' },
+  { code: 'ES', name: 'Spagna', dial_code: '+34', flag: '🇪🇸' },
+  { code: 'CH', name: 'Svizzera', dial_code: '+41', flag: '🇨🇭' },
+  { code: 'AT', name: 'Austria', dial_code: '+43', flag: '🇦🇹' },
+  { code: 'BE', name: 'Belgio', dial_code: '+32', flag: '🇧🇪' },
+  { code: 'NL', name: 'Paesi Bassi', dial_code: '+31', flag: '🇳🇱' },
+  { code: 'PT', name: 'Portogallo', dial_code: '+351', flag: '🇵🇹' },
+  { code: 'RO', name: 'Romania', dial_code: '+40', flag: '🇷🇴' },
+  { code: 'AL', name: 'Albania', dial_code: '+355', flag: '🇦🇱' },
+  { code: 'MA', name: 'Marocco', dial_code: '+212', flag: '🇲🇦' },
+  { code: 'EG', name: 'Egitto', dial_code: '+20', flag: '🇪🇬' },
+  { code: 'CN', name: 'Cina', dial_code: '+86', flag: '🇨🇳' },
+  { code: 'IN', name: 'India', dial_code: '+91', flag: '🇮🇳' },
+  { code: 'BR', name: 'Brasile', dial_code: '+55', flag: '🇧🇷' },
+  { code: 'AR', name: 'Argentina', dial_code: '+54', flag: '🇦🇷' },
+];

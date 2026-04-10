@@ -1,0 +1,126 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() && (
+          request.auth.token.email == 'eaglewealth.fs@gmail.com' ||
+          request.auth.token.email == 'malderadomenico98@gmail.com' ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'barber')
+      );
+    }
+
+    function isRecent(time) {
+      return time > request.time - duration.value(5, 'm') && time < request.time + duration.value(5, 'm');
+    }
+
+    // ===============================================================
+    // Validation Functions
+    // ===============================================================
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email', 'role']) &&
+             data.uid is string &&
+             data.email is string &&
+             data.role in ['barber', 'customer'] &&
+             (!('displayName' in data) || data.displayName is string) &&
+             (!('phoneNumber' in data) || data.phoneNumber is string);
+    }
+
+    function isValidAppointment(data) {
+      return data.keys().hasAll(['customerId', 'services', 'startTime', 'endTime', 'status', 'totalAmount', 'createdAt']) &&
+             data.customerId is string &&
+             data.services is list &&
+             data.status in ['booked', 'cancelled', 'completed'] &&
+             data.totalAmount is number &&
+             (!('isForFriend' in data) || data.isForFriend is bool) &&
+             (!('isManual' in data) || data.isManual is bool) &&
+             (!('cancelledAt' in data) || data.cancelledAt is timestamp) &&
+             (!('cancelledBy' in data) || data.cancelledBy is string) &&
+             (!('customer' in data) || (
+               data.customer is map &&
+               data.customer.keys().hasAll(['displayName', 'phoneNumber'])
+             )) &&
+             (!('friendDetails' in data) || (
+               data.friendDetails is map &&
+               data.friendDetails.keys().hasAll(['firstName', 'lastName', 'phone', 'email'])
+             ));
+    }
+
+    function isValidContact(data) {
+      return data.firstName is string && 
+             data.lastName is string && 
+             data.phone is string;
+    }
+
+    function isValidNotification(data) {
+      return data.userId is string &&
+             data.title is string &&
+             data.message is string &&
+             data.type in ['cancellation', 'booking', 'reschedule_proposal', 'manual_management_required'] &&
+             data.read is bool;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isOwner(userId) && isValidUser(request.resource.data);
+      allow update: if isOwner(userId) && isValidUser(request.resource.data) && 
+                      (request.resource.data.role == resource.data.role || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    match /appointments/{appointmentId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidAppointment(request.resource.data);
+      allow update: if isAuthenticated() && (
+        isAdmin() || 
+        (resource.data.customerId == request.auth.uid && isValidAppointment(request.resource.data))
+      );
+      allow delete: if isAdmin() ||
+               (isAuthenticated() && resource.data.status == 'cancelled') ||
+               (isAuthenticated() && resource.data.customerId == request.auth.uid);
+    }
+
+    match /notifications/{notificationId} {
+      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isAuthenticated() && isValidNotification(request.resource.data);
+      allow update: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow delete: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid || 
+        isAdmin() ||
+        (resource.data.type == 'reschedule_proposal' && 
+         (!exists(/databases/$(database)/documents/rescheduleProposals/$(resource.data.proposalId)) ||
+          get(/databases/$(database)/documents/rescheduleProposals/$(resource.data.proposalId)).data.status == 'completed'))
+      );
+    }
+
+    match /rescheduleProposals/{proposalId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    match /contacts/{contactId} {
+      allow read: if isAdmin();
+      allow write: if isAdmin() && isValidContact(request.resource.data);
+    }
+
+    match /test/connection {
+      allow read: if true;
+    }
+  }
+}
