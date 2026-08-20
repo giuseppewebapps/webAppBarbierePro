@@ -4,6 +4,9 @@ import {
   signInWithPopup, 
   GoogleAuthProvider, 
   signOut,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  updateProfile,
   User as FirebaseUser
 } from 'firebase/auth';
 import { 
@@ -38,7 +41,7 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const useAuth = () => {
   const context = useContext(AuthContext);
-  if (!context) throw new Error('useAuth must be used within AuthProvider'); // CORRETTO
+  if (!context) throw new Error('useAuth must be used within AuthProvider'); 
   return context;
 };
 
@@ -50,10 +53,17 @@ export default function App() {
   const [selectedProposalId, setSelectedProposalId] = useState<string | null>(null);
   const [selectedAppointmentId, setSelectedAppointmentId] = useState<string | null>(null);
 
+  // Stati per gestire l'accesso con Email e Password
+  const [name, setName] = useState(''); // <--- Nuovo stato per il Nome
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [isLoginMode, setIsLoginMode] = useState(true);
+  const [authError, setAuthError] = useState('');
+
   useEffect(() => {
-    if (!user) { // CORRETTO
+    if (!user) { 
       setNotifications([]);
-      return; // CORRETTO
+      return; 
     }
 
     const q = query(
@@ -94,8 +104,8 @@ export default function App() {
         if (userDoc.exists()) {
           setProfile(userDoc.data() as UserProfile);
         } else {
-          // Create new profile
-         const role: UserRole = BARBER_EMAILS.includes(firebaseUser.email || '') ? 'barber' : 'customer';
+          // Creazione profilo di base
+          const role: UserRole = BARBER_EMAILS.includes(firebaseUser.email || '') ? 'barber' : 'customer';
           const newProfile: UserProfile = {
             uid: firebaseUser.uid,
             email: firebaseUser.email || '',
@@ -123,6 +133,35 @@ export default function App() {
     }
   };
 
+  // Funzione sicura per TypeScript con aggiornamento nome su Firestore
+  const handleEmailAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError('');
+    try {
+      if (isLoginMode) {
+        await signInWithEmailAndPassword(auth, email, password);
+      } else {
+        // Registrazione
+        const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+        
+        // Se l'utente ha inserito un nome, aggiorniamo profilo e Firestore
+        if (name.trim() !== '') {
+          await updateProfile(userCredential.user, { displayName: name });
+          await setDoc(doc(db, 'users', userCredential.user.uid), { displayName: name }, { merge: true });
+          setProfile(prev => prev ? { ...prev, displayName: name } : null);
+        }
+      }
+    } catch (error: unknown) {
+      console.error('Auth error:', error);
+      const err = error as { code?: string };
+      if (err.code === 'auth/invalid-email') setAuthError('Formato email non valido.');
+      else if (err.code === 'auth/invalid-credential') setAuthError('Email o password errati.');
+      else if (err.code === 'auth/email-already-in-use') setAuthError('Questa email è già registrata.');
+      else if (err.code === 'auth/weak-password') setAuthError('La password deve avere almeno 6 caratteri.');
+      else setAuthError("Si è verificato un errore. Riprova.");
+    }
+  };
+
   const logout = async () => {
     try {
       await signOut(auth);
@@ -139,7 +178,6 @@ export default function App() {
     );
   }
 
-  // qui per cambiare la gestione account customer
   return (
     <AuthContext.Provider value={{ user, profile, loading, login, logout }}>
       <div className="min-h-screen text-black font-sans relative">
@@ -157,26 +195,86 @@ export default function App() {
         <div className="relative z-10">
           {!user ? (
           <div className="flex flex-col items-center justify-center min-h-screen p-4">
-            <div className="bg-white/80 backdrop-blur-md p-12 rounded-[40px] border border-white/20 shadow-2xl text-center max-w-md w-full">
-              <div className="mb-8">
+            <div className="bg-white/90 backdrop-blur-md p-8 sm:p-12 rounded-[40px] border border-white/20 shadow-2xl w-full max-w-md">
+              <div className="mb-8 text-center">
                 <div className="w-20 h-20 bg-black text-white rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-lg">
                   <Scissors size={40} />
                 </div>
-                <h1 className="text-4xl font-bold tracking-tight text-black">Barberia Pro</h1>
-                <p className="text-gray-600 mt-2 font-medium">Prenota il tuo stile in pochi click</p>
+                <h1 className="text-3xl font-bold tracking-tight text-black">Medo Barberia</h1>
+                <p className="text-gray-600 mt-2 text-sm font-medium">Accedi o registrati per prenotare</p>
               </div>
+
+              {authError && (
+                <div className="mb-4 p-3 bg-red-100 text-red-700 rounded-xl text-sm text-center font-medium">
+                  {authError}
+                </div>
+              )}
+
+              <form onSubmit={handleEmailAuth} className="flex flex-col gap-4 mb-6">
+                {!isLoginMode && (
+                  <input
+                    type="text"
+                    placeholder="Il tuo nome (es. Marco)"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    className="w-full p-4 rounded-2xl border border-gray-200 focus:outline-none focus:border-black transition-colors"
+                    required
+                  />
+                )}
+                <input
+                  type="email"
+                  placeholder="La tua email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="w-full p-4 rounded-2xl border border-gray-200 focus:outline-none focus:border-black transition-colors"
+                  required
+                />
+                <input
+                  type="password"
+                  placeholder="Password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="w-full p-4 rounded-2xl border border-gray-200 focus:outline-none focus:border-black transition-colors"
+                  required
+                />
+                <button
+                  type="submit"
+                  className="w-full py-4 bg-black text-white rounded-2xl font-bold hover:bg-gray-800 transition-all shadow-xl hover:scale-[1.02] active:scale-[0.98]"
+                >
+                  {isLoginMode ? 'Accedi' : 'Registrati'}
+                </button>
+              </form>
+
+              <div className="text-center mb-6">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsLoginMode(!isLoginMode);
+                    setAuthError('');
+                  }}
+                  className="text-sm text-gray-500 hover:text-black font-medium transition-colors"
+                >
+                  {isLoginMode ? 'Non hai un account? Registrati qui' : 'Hai già un account? Accedi qui'}
+                </button>
+              </div>
+
+              <div className="flex items-center gap-4 mb-6">
+                <div className="h-px bg-gray-200 flex-1"></div>
+                <span className="text-xs text-gray-400 font-bold tracking-wider">OPPURE</span>
+                <div className="h-px bg-gray-200 flex-1"></div>
+              </div>
+
               <button
                 onClick={login}
-                className="w-full py-4 bg-black text-white rounded-2xl font-bold hover:bg-gray-800 transition-all flex items-center justify-center gap-3 shadow-xl hover:scale-[1.02] active:scale-[0.98]"
+                className="w-full py-4 bg-white border border-gray-200 text-black rounded-2xl font-bold hover:bg-gray-50 transition-all flex items-center justify-center gap-3 shadow-sm hover:scale-[1.02] active:scale-[0.98]"
               >
                 <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-5 h-5" alt="Google" />
-                Accedi con Google
+                Continua con Google
               </button>
             </div>
           </div>
         ) : (
           <div className="min-h-screen">
-            {/* Global Header */}
             <header className="bg-black/80 backdrop-blur-md text-white sticky top-0 z-[100] shadow-xl border-b border-white/10">
               <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
                 <div className="flex items-center gap-3">
@@ -184,7 +282,7 @@ export default function App() {
                     <Scissors size={24} className="text-white" />
                   </div>
                   <div>
-                    <h1 className="text-lg font-bold tracking-tight">Barberia Pro</h1>
+                    <h1 className="text-lg font-bold tracking-tight">Medo Barberia</h1>
                     <p className="text-[10px] text-gray-400 uppercase tracking-widest">
                       {profile?.role === 'barber' ? 'Calendario Appuntamenti' : `Ciao, ${profile?.displayName}`}
                     </p>
