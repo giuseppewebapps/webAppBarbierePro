@@ -200,7 +200,7 @@ export default function App() {
                 <div className="w-20 h-20 bg-black text-white rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-lg">
                   <Scissors size={40} />
                 </div>
-                <h1 className="text-3xl font-bold tracking-tight text-black">Medo Barberia</h1>
+                <h1 className="text-3xl font-bold tracking-tight text-black">Medo Hair Saloon</h1>
                 <p className="text-gray-600 mt-2 text-sm font-medium">Accedi o registrati per prenotare</p>
               </div>
 
@@ -282,7 +282,7 @@ export default function App() {
                     <Scissors size={24} className="text-white" />
                   </div>
                   <div>
-                    <h1 className="text-lg font-bold tracking-tight">Medo Barberia</h1>
+                    <h1 className="text-lg font-bold tracking-tight">Medo Hair Saloon</h1>
                     <p className="text-[10px] text-gray-400 uppercase tracking-widest">
                       {profile?.role === 'barber' ? 'Calendario Appuntamenti' : `Ciao, ${profile?.displayName}`}
                     </p>
