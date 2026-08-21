@@ -519,24 +519,22 @@ const handleBooking = async (shouldUpdateProfilePhone: boolean = false) => {
         };
       }
 
-      await addDoc(collection(db, 'appointments'), appointmentData);
+      // Catturiamo la reference (e quindi l'ID) del nuovo appuntamento
+      const appointmentRef = await addDoc(collection(db, 'appointments'), appointmentData);
       
       try {
-
-      const barberSnapshot = await getDocs(query(collection(db, 'users'), where('role', '==', 'barber')));
-      
-      // Crea una notifica separata per OGNI barbiere trovato
-      for (const barberDoc of barberSnapshot.docs) {
-        await addDoc(collection(db, 'notifications'), {
-          userId: barberDoc.id,
-          title: 'Nuova Prenotazione',
+        const barberSnapshot = await getDocs(query(collection(db, 'users'), where('role', '==', 'barber')));
+        for (const barberDoc of barberSnapshot.docs) {
+          await addDoc(collection(db, 'notifications'), {
+            userId: barberDoc.id,
+            title: 'Nuova Prenotazione',
             message: `${profile?.displayName} ha prenotato per il ${format(selectedSlot, 'd MMM HH:mm')}`,
             type: 'booking',
             read: false,
-          createdAt: Timestamp.now()
-        });
-      }
-      
+            createdAt: Timestamp.now(),
+            appointmentId: appointmentRef.id
+          });
+        }
       } catch (err) {
         console.warn("Could not notify barber:", err);
       }
@@ -602,7 +600,7 @@ const handleCancel = async (app: Appointment) => {
 
       const barberSnapshot = await getDocs(query(collection(db, 'users'), where('role', '==', 'barber')));
       
-      // Crea una notifica separata per OGNI barbiere trovato
+    // Crea una notifica separata per OGNI barbiere trovato
       for (const barberDoc of barberSnapshot.docs) {
         await addDoc(collection(db, 'notifications'), {
           userId: barberDoc.id,
@@ -610,7 +608,8 @@ const handleCancel = async (app: Appointment) => {
           message: `${profile?.displayName} ha annullato l'appuntamento del ${format(appStart, 'd MMM HH:mm')}`,
           type: 'cancellation',
           read: false,
-          createdAt: Timestamp.now()
+          createdAt: Timestamp.now(),
+          appointmentId: app.id
         });
       }
     } catch (error) {
@@ -672,10 +671,11 @@ const handleCancel = async (app: Appointment) => {
         await addDoc(collection(db, 'notifications'), {
           userId: barberDoc.id,
           title: 'Proposta Accettata',
-            message: `Il cliente ${profile?.displayName} ha accettato la tua proposta per il ${format(proposal.gapStartTime.toDate(), 'd MMM HH:mm')}`,
-            type: 'booking',
-            read: false,
-          createdAt: Timestamp.now()
+          message: `Il cliente ${profile?.displayName} ha accettato la tua proposta per il ${format(proposal.gapStartTime.toDate(), 'd MMM HH:mm')}`,
+          type: 'booking',
+          read: false,
+          createdAt: Timestamp.now(),
+          appointmentId: currentTarget.appointmentId 
         });
       }
 
@@ -714,15 +714,16 @@ const handleCancel = async (app: Appointment) => {
 
       const barberSnapshot = await getDocs(query(collection(db, 'users'), where('role', '==', 'barber')));
       
-      // Crea una notifica separata per OGNI barbiere trovato
+     // Crea una notifica separata per OGNI barbiere trovato
       for (const barberDoc of barberSnapshot.docs) {
         await addDoc(collection(db, 'notifications'), {
           userId: barberDoc.id,
           title: 'Proposta Rifiutata',
-            message: `Il cliente ${profile?.displayName} ha rifiutato la tua proposta per il ${format(proposal.gapStartTime.toDate(), 'd MMM HH:mm')}`,
-            type: 'booking',
-            read: false,
-          createdAt: Timestamp.now()
+          message: `Il cliente ${profile?.displayName} ha rifiutato la tua proposta per il ${format(proposal.gapStartTime.toDate(), 'd MMM HH:mm')}`,
+          type: 'booking',
+          read: false,
+          createdAt: Timestamp.now(),
+          appointmentId: currentTarget.appointmentId
         });
       }
       }
