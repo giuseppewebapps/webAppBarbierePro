@@ -522,18 +522,21 @@ const handleBooking = async (shouldUpdateProfilePhone: boolean = false) => {
       await addDoc(collection(db, 'appointments'), appointmentData);
       
       try {
-        const barberSnapshot = await getDocs(query(collection(db, 'users'), where('role', '==', 'barber'), limit(1)));
-        if (!barberSnapshot.empty) {
-          const barberId = barberSnapshot.docs[0].id;
-          await addDoc(collection(db, 'notifications'), {
-            userId: barberId,
-            title: 'Nuova Prenotazione',
+
+      const barberSnapshot = await getDocs(query(collection(db, 'users'), where('role', '==', 'barber')));
+      
+      // Crea una notifica separata per OGNI barbiere trovato
+      for (const barberDoc of barberSnapshot.docs) {
+        await addDoc(collection(db, 'notifications'), {
+          userId: barberDoc.id,
+          title: 'Nuova Prenotazione',
             message: `${profile?.displayName} ha prenotato per il ${format(selectedSlot, 'd MMM HH:mm')}`,
             type: 'booking',
             read: false,
-            createdAt: Timestamp.now()
-          });
-        }
+          createdAt: Timestamp.now()
+        });
+      }
+      
       } catch (err) {
         console.warn("Could not notify barber:", err);
       }
@@ -597,11 +600,12 @@ const handleCancel = async (app: Appointment) => {
         cancelledBy: 'customer'
       });
 
-      const barberSnapshot = await getDocs(query(collection(db, 'users'), where('role', '==', 'barber'), limit(1)));
-      if (!barberSnapshot.empty) {
-        const barberId = barberSnapshot.docs[0].id;
+      const barberSnapshot = await getDocs(query(collection(db, 'users'), where('role', '==', 'barber')));
+      
+      // Crea una notifica separata per OGNI barbiere trovato
+      for (const barberDoc of barberSnapshot.docs) {
         await addDoc(collection(db, 'notifications'), {
-          userId: barberId,
+          userId: barberDoc.id,
           title: 'Appuntamento Annullato',
           message: `${profile?.displayName} ha annullato l'appuntamento del ${format(appStart, 'd MMM HH:mm')}`,
           type: 'cancellation',
@@ -661,18 +665,19 @@ const handleCancel = async (app: Appointment) => {
           await deleteDoc(doc(db, 'appointments', freshProposal.gapAppointmentId));
         }
         
-        const barberSnapshot = await getDocs(query(collection(db, 'users'), where('role', '==', 'barber'), limit(1)));
-        if (!barberSnapshot.empty) {
-          const barberId = barberSnapshot.docs[0].id;
-          await addDoc(collection(db, 'notifications'), {
-            userId: barberId,
-            title: 'Proposta Accettata',
+      const barberSnapshot = await getDocs(query(collection(db, 'users'), where('role', '==', 'barber')));
+      
+      // Crea una notifica separata per OGNI barbiere trovato
+      for (const barberDoc of barberSnapshot.docs) {
+        await addDoc(collection(db, 'notifications'), {
+          userId: barberDoc.id,
+          title: 'Proposta Accettata',
             message: `Il cliente ${profile?.displayName} ha accettato la tua proposta per il ${format(proposal.gapStartTime.toDate(), 'd MMM HH:mm')}`,
             type: 'booking',
             read: false,
-            createdAt: Timestamp.now()
-          });
-        }
+          createdAt: Timestamp.now()
+        });
+      }
 
         // Elimina la proposta perché è stata accettata
         await deleteDoc(proposalRef);
@@ -707,18 +712,19 @@ const handleCancel = async (app: Appointment) => {
           });
         }
 
-        const barberSnapshot = await getDocs(query(collection(db, 'users'), where('role', '==', 'barber'), limit(1)));
-        if (!barberSnapshot.empty) {
-          const barberId = barberSnapshot.docs[0].id;
-          await addDoc(collection(db, 'notifications'), {
-            userId: barberId,
-            title: 'Proposta Rifiutata',
+      const barberSnapshot = await getDocs(query(collection(db, 'users'), where('role', '==', 'barber')));
+      
+      // Crea una notifica separata per OGNI barbiere trovato
+      for (const barberDoc of barberSnapshot.docs) {
+        await addDoc(collection(db, 'notifications'), {
+          userId: barberDoc.id,
+          title: 'Proposta Rifiutata',
             message: `Il cliente ${profile?.displayName} ha rifiutato la tua proposta per il ${format(proposal.gapStartTime.toDate(), 'd MMM HH:mm')}`,
             type: 'booking',
             read: false,
-            createdAt: Timestamp.now()
-          });
-        }
+          createdAt: Timestamp.now()
+        });
+      }
       }
 
       // Gestione cancellazione notifiche
