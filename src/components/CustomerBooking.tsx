@@ -100,14 +100,23 @@ const AppointmentTicket: React.FC<{
   
   const canCancel = app.status === 'booked' && !isPast && (isMoreThan6Hours || isGracePeriod);
   
-  return (
+return (
     <div 
-      id={`appointment-${app.id}`} // <--- ID PER LO SCORRIMENTO
+      id={`appointment-${app.id}`}
       className={cn(
-        "relative bg-white rounded-3xl p-6 shadow-md border transition-all duration-500 overflow-hidden", // duration-500 per l'animazione fluida
-        isCancelled && "opacity-60 grayscale",
-        // L'EFFETTO BAGLIORE SE È EVIDENZIATO:
-        isHighlighted ? "border-emerald-500 shadow-emerald-500/20 shadow-2xl ring-4 ring-emerald-500/30 scale-[1.02] z-10" : "border-gray-100 hover:shadow-lg"
+        "relative rounded-3xl p-6 transition-all duration-500 overflow-hidden",
+        
+        // 1. STATO NORMALE: Non evidenziato e Annullato (Grigio e sbiadito)
+        !isHighlighted && isCancelled && "bg-white opacity-60 grayscale border border-gray-100 shadow-md",
+        
+        // 2. STATO NORMALE: Non evidenziato e Valido (Bianco normale)
+        !isHighlighted && !isCancelled && "bg-white border border-gray-100 hover:shadow-lg shadow-md",
+        
+        // 3. EVIDENZIATO E ANNULLATO: Torna opaco al 100%, toglie il grigio ed emette un bagliore ROSSO
+        isHighlighted && isCancelled && "bg-red-50/95 border-2 border-red-500 shadow-[0_0_40px_rgba(239,68,68,0.4)] ring-4 ring-red-500/30 scale-[1.02] z-20 opacity-100 grayscale-0",
+        
+        // 4. EVIDENZIATO E VALIDO: Emette un bagliore VERDE
+        isHighlighted && !isCancelled && "bg-emerald-50/95 border-2 border-emerald-500 shadow-[0_0_40px_rgba(16,185,129,0.4)] ring-4 ring-emerald-500/30 scale-[1.02] z-20"
       )}
     >
       <div className="absolute top-1/2 -left-3 -translate-y-1/2 w-6 h-6 bg-gray-50 rounded-full border border-gray-100 shadow-inner z-10" />
@@ -310,18 +319,21 @@ export default function CustomerBooking({
       // 2. Imposta l'appuntamento da illuminare
       setHighlightedAppId(selectedAppointmentId);
 
-      // 3. Aspetta un decimo di secondo per far caricare la tab, poi scorri
+      // 3. Aspettiamo mezzo secondo (500ms) per essere CERTI che React 
+      // abbia renderizzato la nuova pagina, poi scorriamo con calma
       setTimeout(() => {
         const element = document.getElementById(`appointment-${selectedAppointmentId}`);
         if (element) {
+          // Centriamo l'elemento nello schermo dolcemente
           element.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }
-      }, 100);
+      }, 500);
 
-      // 4. Spegni il bagliore dopo 3 secondi
+      // 4. Aumentiamo il tempo del bagliore a 5 secondi per dare all'utente 
+      // il tempo di leggere comodamente la scheda annullata
       setTimeout(() => {
         setHighlightedAppId(null);
-      }, 3000);
+      }, 5000);
 
       // Resetta l'ID notifica verso App.tsx
       if (onAppointmentDialogClose) onAppointmentDialogClose();
@@ -739,14 +751,24 @@ const handleCancel = async (app: Appointment) => {
     }
   };
 
+  // 1. Prossimi Appuntamenti: Includiamo i "booked" e i "cancelled" futuri
   const upcomingAppointments = myAppointments
-    .filter(a => a.status === 'booked' && a.startTime.toDate() > new Date())
+    .filter(a => (a.status === 'booked' || a.status === 'cancelled') && a.startTime.toDate() > new Date())
     .sort((a, b) => a.startTime.toMillis() - b.startTime.toMillis());
     
-  const activeAppointment = upcomingAppointments[0];
+  // 2. Active Appointment: Il box gigante in alto deve mostrare SOLO il prossimo confermato
+  const activeAppointment = upcomingAppointments.find(a => a.status === 'booked');
+
+  // 3. Storico Appuntamenti: Completati, Passati, Annullati passati, O quello cliccato dalla notifica
   const pastAppointments = myAppointments
-    .filter(a => a.status === 'completed' || (a.status === 'booked' && a.startTime.toDate() < new Date()))
-    .slice(0, 3);
+    .filter(a => 
+      a.status === 'completed' || 
+      (a.status === 'cancelled' && a.startTime.toDate() <= new Date()) ||
+      (a.status === 'booked' && a.startTime.toDate() <= new Date()) ||
+      a.id === highlightedAppId // <-- TRUCCO DA ESPERTI: Forza la visualizzazione se ci hai cliccato!
+    )
+    .sort((a, b) => b.startTime.toMillis() - a.startTime.toMillis())
+    .slice(0, 10); // Aumentato da 3 a 10 per dare più profondità allo storico
 
   return (
     <div className="max-w-4xl mx-auto pb-32 px-4 sm:px-6 overflow-x-hidden w-full">
