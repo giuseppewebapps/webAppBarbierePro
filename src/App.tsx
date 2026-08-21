@@ -86,6 +86,19 @@ export default function App() {
   }, [user]);
 
   useEffect(() => {
+    if (!user) {
+      setProfile(null);
+      return;
+    }
+    const unsubscribe = onSnapshot(doc(db, 'users', user.uid), (docSnap) => {
+      if (docSnap.exists()) {
+        setProfile(docSnap.data() as UserProfile);
+      }
+    });
+    return () => unsubscribe();
+  }, [user]);
+
+  useEffect(() => {
     const testConnection = async () => {
       try {
         await getDocFromServer(doc(db, 'test', 'connection'));
@@ -101,9 +114,7 @@ export default function App() {
       setUser(firebaseUser);
       if (firebaseUser) {
         const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
-        if (userDoc.exists()) {
-          setProfile(userDoc.data() as UserProfile);
-        } else {
+        if (!userDoc.exists()) {
           // Creazione profilo di base
           const role: UserRole = BARBER_EMAILS.includes(firebaseUser.email || '') ? 'barber' : 'customer';
           const newProfile: UserProfile = {
@@ -113,10 +124,7 @@ export default function App() {
             role: role,
           };
           await setDoc(doc(db, 'users', firebaseUser.uid), newProfile);
-          setProfile(newProfile);
         }
-      } else {
-        setProfile(null);
       }
       setLoading(false);
     });

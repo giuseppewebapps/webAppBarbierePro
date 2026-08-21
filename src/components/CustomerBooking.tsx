@@ -350,7 +350,7 @@ export default function CustomerBooking({
     setSelectedSlot(null);
   };
 
-  const handleBooking = async (shouldUpdateProfilePhone: boolean = false) => {
+const handleBooking = async (shouldUpdateProfilePhone: boolean = false) => {
     if (!selectedSlot || selectedServices.length === 0 || !profile) return;
 
     const fullPhone = phonePrefix + phoneNumber.replace(/\D/g, '');
@@ -376,12 +376,18 @@ export default function CustomerBooking({
     }
 
     if (!isForFriend && fullPhone !== profile.phoneNumber && !showPhoneUpdatePopup && !shouldUpdateProfilePhone) {
-      setNewPhoneNumberToUpdate(fullPhone);
-      setShowPhoneUpdatePopup(true);
-      return;
+            
+      // SE I NUMERI SONO DIVERSI: Mostra il popup e ferma l'esecuzione corrente
+      if (fullPhone !== profile.phoneNumber) {
+        setNewPhoneNumberToUpdate(fullPhone);
+        setShowPhoneUpdatePopup(true);
+        return; 
+      }
+      // Se sono uguali, NON fa il return e la prenotazione procede normalmente!
     }
 
     setLoading(true);
+    
     const totalDuration = selectedServices.reduce((acc, s) => acc + s.duration, 0);
     const totalAmount = selectedServices.reduce((acc, s) => acc + s.price, 0);
     const endTime = addMinutes(selectedSlot, totalDuration);
