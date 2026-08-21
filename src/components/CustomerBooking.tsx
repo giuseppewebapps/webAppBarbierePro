@@ -651,7 +651,7 @@ const handleCancel = async (app: Appointment) => {
         const newStartTime = freshProposal.gapStartTime.toDate();
         const newEndTime = new Date(newStartTime.getTime() + duration);
 
-        // Aggiorna l'appuntamento originale invece di delete+create
+        // 1. Aggiorna l'appuntamento originale
         await updateDoc(doc(db, 'appointments', currentTarget.appointmentId), {
           startTime: Timestamp.fromDate(newStartTime),
           endTime: Timestamp.fromDate(newEndTime),
@@ -659,28 +659,49 @@ const handleCancel = async (app: Appointment) => {
           updatedAt: Timestamp.now()
         });
 
-        // Elimina il gap appointment se esiste
+        // 2. Elimina il gap appointment se esiste
         if (freshProposal.gapAppointmentId) {
-          await deleteDoc(doc(db, 'appointments', freshProposal.gapAppointmentId));
+          try {
+            await deleteDoc(doc(db, 'appointments', freshProposal.gapAppointmentId));
+          } catch (e) {
+            console.warn("Gap appointment delete skipped:", e);
+          }
         }
         
-      const barberSnapshot = await getDocs(query(collection(db, 'users'), where('role', '==', 'barber')));
-      
-      // Crea una notifica separata per OGNI barbiere trovato
-      for (const barberDoc of barberSnapshot.docs) {
-        await addDoc(collection(db, 'notifications'), {
-          userId: barberDoc.id,
-          title: 'Proposta Accettata',
-          message: `Il cliente ${profile?.displayName} ha accettato la tua proposta per il ${format(proposal.gapStartTime.toDate(), 'd MMM HH:mm')}`,
-          type: 'booking',
-          read: false,
-          createdAt: Timestamp.now(),
-          appointmentId: currentTarget.appointmentId 
-        });
-      }
+        // 3. Notifica tutti i barbieri
+        const barberSnapshot = await getDocs(query(collection(db, 'users'), where('role', '==', 'barber')));
+        for (const barberDoc of barberSnapshot.docs) {
+          await addDoc(collection(db, 'notifications'), {
+            userId: barberDoc.id,
+            title: 'Proposta Accettata',
+            message: `Il cliente ${profile?.displayName} ha accettato la tua proposta per il ${format(proposal.gapStartTime.toDate(), 'd MMM HH:mm')}`,
+            type: 'booking',
+            read: false,
+            createdAt: Timestamp.now(),
+            appointmentId: currentTarget.appointmentId 
+          });
+        }
 
-        // Elimina la proposta perché è stata accettata
-        await deleteDoc(proposalRef);
+        // 4. SOFT DELETE: Aggiorna lo stato della proposta a 'completed' (evita il crash di permessi)
+        await updateDoc(proposalRef, { 
+          status: 'completed',
+          updatedAt: Timestamp.now()
+        });
+
+        // 5. Pulizia notifiche locali dell'utente
+        try {
+          const notifQ = query(
+            collection(db, 'notifications'), 
+            where('proposalId', '==', proposal.id),
+            where('userId', '==', profile?.uid)
+          );
+          const notifSnapshot = await getDocs(notifQ);
+          for (const d of notifSnapshot.docs) {
+            await deleteDoc(doc(db, 'notifications', d.id));
+          }
+        } catch (err) {
+          console.warn("Pulizia notifiche utente completata con avviso:", err);
+        }
       } else {
         currentTarget.status = 'declined';
         
@@ -728,20 +749,18 @@ const handleCancel = async (app: Appointment) => {
       }
       }
 
-      // Gestione cancellazione notifiche
-      let notifQ;
-      if (action === 'accepted') {
-        notifQ = query(collection(db, 'notifications'), where('proposalId', '==', proposal.id));
-      } else {
-        notifQ = query(collection(db, 'notifications'), 
+      // Pulizia notifiche destinate ESCLUSIVAMENTE all'utente corrente
+      if (profile?.uid) {
+        const userNotifQ = query(
+          collection(db, 'notifications'),
           where('proposalId', '==', proposal.id),
-          where('userId', '==', profile?.uid)
+          where('userId', '==', profile.uid)
         );
-      }
-      
-      const notifSnapshot = await getDocs(notifQ);
-      for (const d of notifSnapshot.docs) {
-        await deleteDoc(doc(db, 'notifications', d.id));
+        
+        const userNotifSnapshot = await getDocs(userNotifQ);
+        for (const d of userNotifSnapshot.docs) {
+          await deleteDoc(doc(db, 'notifications', d.id));
+        }
       }
 
       setProposals(prev => prev.filter(p => p.id !== proposal.id));

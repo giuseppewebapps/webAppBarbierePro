@@ -14,7 +14,7 @@ export const OPENING_HOURS = [
 export const CLOSED_DAYS = [0, 1]; // 0 = Sunday, 1 = Monday
 
 export const BARBER_EMAILS = [
-  'giuseppe.webapps@gmail.com',
+  'eaglewealth.fs@gmail.com',
   'malderadomenico98@gmail.com',
 ];
 

@@ -113,6 +113,7 @@ export default function BarberDashboard({ selectedAppointmentId, onAppointmentDi
   const [isManualBookingOpen, setIsManualBookingOpen] = useState(false);
   const [viewMode, setViewMode] = useState<'daily' | 'weekly' | 'monthly'>('daily');
   const [searchTerm, setSearchTerm] = useState('');
+  const [highlightedAppId, setHighlightedAppId] = useState<string | null>(null);
   const [isSearchActive, setIsSearchActive] = useState(false);
 
   useEffect(() => {
@@ -250,13 +251,32 @@ export default function BarberDashboard({ selectedAppointmentId, onAppointmentDi
 
 // AGGIUNTA: Ascolta il click dalla notifica e apre il popup del Barbiere
   useEffect(() => {
-    // Se ci arriva un ID dalle notifiche e abbiamo caricato gli appuntamenti
     if (selectedAppointmentId && appointments.length > 0) {
       const foundApp = appointments.find(a => a.id === selectedAppointmentId);
       if (foundApp) {
-        // Apre il popup di dettaglio
+        // 1. Sposta magicamente il calendario al giorno dell'appuntamento
+        setSelectedDate(foundApp.startTime.toDate());
+        
+        // 2. Apre il popup di dettaglio
         setSelectedAppointment(foundApp);
-        // Avvisa App.tsx di resettare l'ID, così non si riapre all'infinito
+
+        // 3. Imposta l'appuntamento da illuminare
+        setHighlightedAppId(selectedAppointmentId);
+
+        // 4. Aspettiamo mezzo secondo per il render, poi scorriamo (in Orizzontale!)
+        setTimeout(() => {
+          const element = document.getElementById(`appointment-${selectedAppointmentId}`);
+          if (element) {
+            element.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+          }
+        }, 500);
+
+        // 5. Spegniamo il bagliore dopo 5 secondi
+        setTimeout(() => {
+          setHighlightedAppId(null);
+        }, 5000);
+        
+        // 6. Avvisa App.tsx di resettare l'ID
         if (onAppointmentDialogClose) onAppointmentDialogClose();
       }
     }
@@ -583,6 +603,7 @@ export default function BarberDashboard({ selectedAppointmentId, onAppointmentDi
                       return (
                         <div 
                           key={app.id} 
+                          id={`appointment-${app.id}`}
                           onClick={() => {
                             if (selectionMode) {
                               if (isCandidate) toggleCandidate(app.id!);
@@ -592,7 +613,11 @@ export default function BarberDashboard({ selectedAppointmentId, onAppointmentDi
                           }}
                           style={{ width: `${cardWidth}rem` }}
                           className={cn(
-                            "flex-shrink-0 p-2.5 rounded-xl shadow-md flex flex-col justify-between text-left hover:scale-[1.02] transition-transform cursor-pointer relative h-[88px]",
+                            "flex-shrink-0 p-2.5 rounded-xl shadow-md flex flex-col justify-between text-left transition-all cursor-pointer relative h-[88px] duration-500",
+                            
+                            // EFFETTO BAGLIORE SE EVIDENZIATO
+                            app.id === highlightedAppId ? (app.status === 'cancelled' ? "ring-4 ring-red-500 shadow-[0_0_30px_rgba(239,68,68,0.7)] scale-[1.05] z-20 grayscale-0 opacity-100" : "ring-4 ring-emerald-500 shadow-[0_0_30px_rgba(16,185,129,0.6)] scale-[1.05] z-20") : "hover:scale-[1.02]",
+                            
                             selectionMode && !isCandidate ? "bg-gray-100 text-gray-400 grayscale shadow-none border-gray-200" :
                             isSelected ? "bg-emerald-500 text-white ring-4 ring-emerald-500/30" :
                             (app.status === 'completed' || (app.status === 'booked' && isBefore(app.endTime.toDate(), currentTime))) ? "bg-emerald-600 text-white" :
@@ -875,7 +900,6 @@ function ManualBookingModal({ onClose, onSuccess }: ManualBookingModalProps) {
   const [selectedSlot, setSelectedSlot] = useState<Date | null>(null);
   const [loading, setLoading] = useState(false);
   const [suggestions, setSuggestions] = useState<{ firstName: string, lastName: string, phone: string, email?: string, phonePrefix?: string }[]>([]);
-
   // Search for contacts as the barber types
   useEffect(() => {
     const searchContacts = async () => {
