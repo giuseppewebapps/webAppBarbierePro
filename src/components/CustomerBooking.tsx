@@ -30,7 +30,8 @@ import {
   getDay,
   eachDayOfInterval,
   addDays,
-  isAfter
+  isAfter,
+  differenceInMinutes
 } from 'date-fns';
 import { it } from 'date-fns/locale';
 import { DayPicker } from 'react-day-picker';
@@ -85,8 +86,17 @@ interface CustomerBookingProps {
 
 // Helper component for Appointment Ticket
 const AppointmentTicket: React.FC<{ app: Appointment, onCancel?: (app: Appointment) => void }> = ({ app, onCancel }) => {
-  const isPast = isBefore(app.startTime.toDate(), new Date());
+  const now = new Date();
+  const isPast = isBefore(app.startTime.toDate(), now);
   const isCancelled = app.status === 'cancelled';
+  
+  // Calcolo per il Periodo di Grazia (15 minuti) e le 6 ore
+  const createdAt = app.createdAt?.toDate ? app.createdAt.toDate() : new Date(0);
+  const isGracePeriod = differenceInMinutes(now, createdAt) <= 15;
+  const isMoreThan6Hours = isAfter(app.startTime.toDate(), addHours(now, 6));
+  
+  // Può cancellare se non è passato e (mancano più di 6h OPPURE è nel periodo di grazia)
+  const canCancel = app.status === 'booked' && !isPast && (isMoreThan6Hours || isGracePeriod);
   
   return (
     <div 
@@ -132,7 +142,7 @@ const AppointmentTicket: React.FC<{ app: Appointment, onCancel?: (app: Appointme
         </div>
         <div className="flex justify-between items-center">
           <div className="text-sm font-bold text-gray-900">€{app.totalAmount}</div>
-          {onCancel && app.status === 'booked' && !isPast && isAfter(app.startTime.toDate(), addHours(new Date(), 6)) && (
+          {onCancel && canCancel && (
             <button
               onClick={() => onCancel(app)}
               className="text-[10px] font-bold text-red-500 hover:bg-red-50 px-3 py-1.5 rounded-xl transition-colors uppercase tracking-wider"
@@ -517,9 +527,10 @@ const handleBooking = async (shouldUpdateProfilePhone: boolean = false) => {
     }
   };
 
-  const handleCancel = async (app: Appointment) => {
+const handleCancel = async (app: Appointment) => {
     const now = new Date();
     const appStart = app.startTime.toDate();
+    const createdAt = app.createdAt?.toDate ? app.createdAt.toDate() : new Date(0);
     
     if (app.status === 'completed' || isBefore(appStart, now)) {
       alert("Non puoi annullare un appuntamento passato o completato.");
@@ -527,9 +538,11 @@ const handleBooking = async (shouldUpdateProfilePhone: boolean = false) => {
     }
 
     const hoursDiff = (appStart.getTime() - now.getTime()) / (1000 * 60 * 60);
+    const isGracePeriod = differenceInMinutes(now, createdAt) <= 15;
 
-    if (hoursDiff < 6) {
-      alert("Puoi annullare solo fino a 6 ore prima dell'appuntamento.");
+    // Se mancano meno di 6 ore E NON siamo nel periodo di grazia (15 minuti dopo aver prenotato), blocca tutto.
+    if (hoursDiff < 6 && !isGracePeriod) {
+      alert("Puoi annullare solo fino a 6 ore prima dell'appuntamento. (Hai 15 minuti di tempo dopo aver prenotato per correggere un eventuale errore).");
       return;
     }
 
