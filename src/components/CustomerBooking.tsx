@@ -85,24 +85,29 @@ interface CustomerBookingProps {
 }
 
 // Helper component for Appointment Ticket
-const AppointmentTicket: React.FC<{ app: Appointment, onCancel?: (app: Appointment) => void }> = ({ app, onCancel }) => {
+const AppointmentTicket: React.FC<{ 
+  app: Appointment, 
+  onCancel?: (app: Appointment) => void,
+  isHighlighted?: boolean // <--- NUOVA PROP
+}> = ({ app, onCancel, isHighlighted }) => {
   const now = new Date();
   const isPast = isBefore(app.startTime.toDate(), now);
   const isCancelled = app.status === 'cancelled';
   
-  // Calcolo per il Periodo di Grazia (15 minuti) e le 6 ore
   const createdAt = app.createdAt?.toDate ? app.createdAt.toDate() : new Date(0);
   const isGracePeriod = differenceInMinutes(now, createdAt) <= 15;
   const isMoreThan6Hours = isAfter(app.startTime.toDate(), addHours(now, 6));
   
-  // Può cancellare se non è passato e (mancano più di 6h OPPURE è nel periodo di grazia)
   const canCancel = app.status === 'booked' && !isPast && (isMoreThan6Hours || isGracePeriod);
   
   return (
     <div 
+      id={`appointment-${app.id}`} // <--- ID PER LO SCORRIMENTO
       className={cn(
-        "relative bg-white rounded-3xl p-6 shadow-md border border-gray-100 transition-all hover:shadow-lg overflow-hidden",
-        isCancelled && "opacity-60 grayscale"
+        "relative bg-white rounded-3xl p-6 shadow-md border transition-all duration-500 overflow-hidden", // duration-500 per l'animazione fluida
+        isCancelled && "opacity-60 grayscale",
+        // L'EFFETTO BAGLIORE SE È EVIDENZIATO:
+        isHighlighted ? "border-emerald-500 shadow-emerald-500/20 shadow-2xl ring-4 ring-emerald-500/30 scale-[1.02] z-10" : "border-gray-100 hover:shadow-lg"
       )}
     >
       <div className="absolute top-1/2 -left-3 -translate-y-1/2 w-6 h-6 bg-gray-50 rounded-full border border-gray-100 shadow-inner z-10" />
@@ -159,8 +164,8 @@ const AppointmentTicket: React.FC<{ app: Appointment, onCancel?: (app: Appointme
 export default function CustomerBooking({ 
   selectedProposalIdFromNotification, 
   onProposalDialogClose,
-  selectedAppointmentId: _selectedAppointmentId,
-  onAppointmentDialogClose: _onAppointmentDialogClose
+  selectedAppointmentId,
+  onAppointmentDialogClose
 }: CustomerBookingProps) {
   const { profile } = useAuth();
 
@@ -202,6 +207,7 @@ export default function CustomerBooking({
   const [showCalendar, setShowCalendar] = useState(false);
   const [newPhoneNumberToUpdate, setNewPhoneNumberToUpdate] = useState<string | null>(null);
   const [showContactMenu, setShowContactMenu] = useState(false);
+  const [highlightedAppId, setHighlightedAppId] = useState<string | null>(null);
 
   useEffect(() => {
     if (profile?.phoneNumber) {
@@ -295,6 +301,32 @@ export default function CustomerBooking({
       setAvailableSlots([]);
     }
   }, [selectedDate, selectedServices]);
+
+// Ascolta il click dalla notifica e lancia l'animazione
+  useEffect(() => {
+    if (selectedAppointmentId) {
+      // 1. Sposta sulla tab appuntamenti
+      setActiveTab('appointments');
+      // 2. Imposta l'appuntamento da illuminare
+      setHighlightedAppId(selectedAppointmentId);
+
+      // 3. Aspetta un decimo di secondo per far caricare la tab, poi scorri
+      setTimeout(() => {
+        const element = document.getElementById(`appointment-${selectedAppointmentId}`);
+        if (element) {
+          element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }, 100);
+
+      // 4. Spegni il bagliore dopo 3 secondi
+      setTimeout(() => {
+        setHighlightedAppId(null);
+      }, 3000);
+
+      // Resetta l'ID notifica verso App.tsx
+      if (onAppointmentDialogClose) onAppointmentDialogClose();
+    }
+  }, [selectedAppointmentId, onAppointmentDialogClose]);
 
   const calculateSlots = async () => {
     setLoading(true);
@@ -1201,7 +1233,12 @@ const handleCancel = async (app: Appointment) => {
             ) : (
               <div className="grid gap-6 sm:grid-cols-2">
                 {upcomingAppointments.map(app => (
-                  <AppointmentTicket key={app.id} app={app} onCancel={setShowCancelConfirm} />
+                  <AppointmentTicket 
+                    key={app.id} 
+                    app={app} 
+                    onCancel={setShowCancelConfirm} 
+                    isHighlighted={highlightedAppId === app.id}
+                  />
                 ))}
               </div>
             )}
@@ -1217,7 +1254,11 @@ const handleCancel = async (app: Appointment) => {
             ) : (
               <div className="grid gap-6 sm:grid-cols-2">
                 {pastAppointments.map(app => (
-                  <AppointmentTicket key={app.id} app={app} />
+                  <AppointmentTicket 
+                    key={app.id} 
+                    app={app} 
+                    isHighlighted={highlightedAppId === app.id}
+                  />
                 ))}
               </div>
             )}

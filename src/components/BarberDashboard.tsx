@@ -248,6 +248,20 @@ export default function BarberDashboard({ selectedAppointmentId, onAppointmentDi
     return () => unsubscribe();
   }, []);
 
+// AGGIUNTA: Ascolta il click dalla notifica e apre il popup del Barbiere
+  useEffect(() => {
+    // Se ci arriva un ID dalle notifiche e abbiamo caricato gli appuntamenti
+    if (selectedAppointmentId && appointments.length > 0) {
+      const foundApp = appointments.find(a => a.id === selectedAppointmentId);
+      if (foundApp) {
+        // Apre il popup di dettaglio
+        setSelectedAppointment(foundApp);
+        // Avvisa App.tsx di resettare l'ID, così non si riapre all'infinito
+        if (onAppointmentDialogClose) onAppointmentDialogClose();
+      }
+    }
+  }, [selectedAppointmentId, appointments, onAppointmentDialogClose]);
+
   const handleCancel = async (app: Appointment) => {
     const path = `appointments/${app.id}`;
     try {
