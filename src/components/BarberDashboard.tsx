@@ -1019,6 +1019,17 @@ function ManualBookingModal({ onClose, onSuccess }: ManualBookingModalProps) {
   const [loading, setLoading] = useState(false);
   const [sendWhatsApp, setSendWhatsApp] = useState(true);
   const [suggestions, setSuggestions] = useState<{ firstName: string, lastName: string, phone: string, email?: string, phonePrefix?: string }[]>([]);
+  const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
+  
+  useEffect(() => {
+  const q = query(collection(db, 'calendar_exceptions'));
+  const unsubscribe = onSnapshot(q, (snapshot) => {
+    const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as SpecialDay[];
+    setSpecialDays(docs);
+  });
+  return () => unsubscribe();
+}, []);
+
   // Search for contacts as the barber types
   useEffect(() => {
     const searchContacts = async () => {
@@ -1062,10 +1073,15 @@ function ManualBookingModal({ onClose, onSuccess }: ManualBookingModalProps) {
     setSuggestions([]);
   };
 
-  const next30Days = React.useMemo(() => eachDayOfInterval({
-    start: new Date(),
-    end: addDays(new Date(), 30)
-  }).filter(d => !CLOSED_DAYS.includes(getDay(d))), []);
+const next30Days = React.useMemo(() => {
+  const days = eachDayOfInterval({ start: new Date(), end: addDays(new Date(), 30) });
+  return days.filter(d => {
+    const dateString = format(d, 'yyyy-MM-dd');
+    const exception = specialDays.find(ex => ex.date === dateString);
+    if (exception) return !exception.isClosed;
+    return !CLOSED_DAYS.includes(getDay(d));
+  });
+}, [specialDays]);
 
   useEffect(() => {
     if (selectedDate && selectedServices.length > 0) {
@@ -1079,6 +1095,22 @@ function ManualBookingModal({ onClose, onSuccess }: ManualBookingModalProps) {
     setLoading(true);
     const dayStart = startOfDay(selectedDate);
     const dayEnd = endOfDay(selectedDate);
+
+    // 1. Formattiamo la data per Firebase
+    const dateString = format(selectedDate, 'yyyy-MM-dd');
+    
+    // 2. Cerchiamo se c'è un'eccezione in tempo reale per questo giorno
+    const exceptionForToday = specialDays.find(ex => ex.date === dateString);
+
+    // 3. Controllo blocco se è chiuso (per ferie speciali o perché è un giorno di chiusura standard)
+    if (exceptionForToday?.isClosed || (!exceptionForToday && CLOSED_DAYS.includes(getDay(selectedDate)))) {
+      setAvailableSlots([]);
+      setLoading(false);
+      return;
+    }
+
+    // 4. Definiamo quali orari usare (quelli speciali se ci sono, altrimenti gli standard)
+    const activeOpeningHours = exceptionForToday?.openingHours || OPENING_HOURS;
 
     try {
       const q = query(
@@ -1094,7 +1126,8 @@ function ManualBookingModal({ onClose, onSuccess }: ManualBookingModalProps) {
       const totalDuration = selectedServices.reduce((acc, s) => acc + s.duration, 0);
       const slots: Date[] = [];
 
-      OPENING_HOURS.forEach(range => {
+      // 5. Cicliamo sui nuovi orari attivi!
+      activeOpeningHours.forEach(range => {
         let current = setMinutes(setHours(dayStart, range.start), 0);
         const rangeEnd = setMinutes(setHours(dayStart, range.end), 0);
 
