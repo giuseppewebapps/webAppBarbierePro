@@ -1325,9 +1325,16 @@ function ManualBookingModal({ onClose, onSuccess }: ManualBookingModalProps) {
                     )}
                   >
                     <div className="font-bold text-sm">{service.name}</div>
-                    <div className={cn("text-[10px] mt-1", isSelected ? "text-gray-400" : "text-gray-400")}>
-                      {service.duration} min • €{service.price}
+                  {/* INIZIO DESCRIZIONE */}
+                  {service.description && (
+                    <div className={cn("text-[10px] mt-0.5 leading-tight", isSelected ? "text-gray-400" : "text-gray-500")}>
+                      {service.description}
                     </div>
+                  )}
+                  {/* FINE DESCRIZIONE */}
+                  <div className={cn("text-[10px] mt-1 font-medium", isSelected ? "text-gray-400" : "text-gray-400")}>
+                    {service.duration} min • €{service.price}
+                  </div>
                     {isSelected && (
                       <div className="absolute top-2 right-2">
                         <CheckCircle2 size={14} className="text-white" />

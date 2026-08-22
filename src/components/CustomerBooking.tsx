@@ -15,7 +15,7 @@ import {
 } from 'firebase/firestore';
 import { db, auth } from '../firebase';
 import { useAuth } from '../App';
-import { SERVICES, OPENING_HOURS, CLOSED_DAYS, COUNTRY_CODES, BARBER_EMAILS } from '../constants';
+import { SERVICES, OPENING_HOURS, CLOSED_DAYS, COUNTRY_CODES, BARBER_EMAILS, SALON_INFO } from '../constants';
 import { Appointment, Service, RescheduleProposal } from '../types';
 import { 
   format, 
@@ -1027,7 +1027,14 @@ const handleCancel = async (app: Appointment) => {
               >
                 <div>
                   <div className="font-bold">{service.name}</div>
-                  <div className={`text-sm ${selectedServices.find(s => s.id === service.id) ? 'text-gray-400' : 'text-gray-500'}`}>
+                  {/* INIZIO DESCRIZIONE */}
+                  {service.description && (
+                    <div className={cn("text-xs mt-0.5 mb-1 leading-tight", selectedServices.find(s => s.id === service.id) ? "text-gray-300" : "text-gray-500")}>
+                      {service.description}
+                    </div>
+                  )}
+                  {/* FINE DESCRIZIONE */}
+                  <div className={`text-sm ${selectedServices.find(s => s.id === service.id) ? 'text-gray-400' : 'text-gray-500 font-medium'}`}>
                     {service.duration} min • €{service.price}
                   </div>
                 </div>
@@ -1348,7 +1355,7 @@ const handleCancel = async (app: Appointment) => {
                         </div>
                         <div className="flex-1">
                           <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Telefono</div>
-                          <div className="font-bold text-gray-900">+39 012 345 6789</div>
+                          <div className="font-bold text-gray-900">{SALON_INFO.phone}</div>
                         </div>
                         <ChevronDown size={20} className={cn("text-gray-400 transition-transform", showContactMenu && "rotate-180")} />
                       </button>
@@ -1356,7 +1363,7 @@ const handleCancel = async (app: Appointment) => {
                       {showContactMenu && (
                         <div className="absolute top-full left-0 right-0 mt-2 bg-white rounded-2xl shadow-2xl border border-gray-100 overflow-hidden z-50 animate-in slide-in-from-top-2">
                           <a 
-                            href="tel:+390123456789"
+                            href={`tel:+${SALON_INFO.whatsapp}`}
                             className="flex items-center gap-3 p-4 hover:bg-gray-50 transition-colors border-b border-gray-50"
                           >
                             <Phone size={18} className="text-emerald-600" />
@@ -1389,7 +1396,7 @@ const handleCancel = async (app: Appointment) => {
                     </a>
 
                     <a 
-                      href="https://instagram.com/barbershop_official" 
+                      href={SALON_INFO.instagramUrl} 
                       target="_blank" 
                       rel="noreferrer"
                       className="flex items-center gap-4 group hover:bg-gray-50 p-3 -m-3 rounded-2xl transition-all"
@@ -1399,14 +1406,14 @@ const handleCancel = async (app: Appointment) => {
                       </div>
                       <div>
                         <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Instagram</div>
-                        <div className="font-bold text-gray-900">@barbershop_official</div>
+                        <div className="font-bold text-gray-900">{SALON_INFO.instagram}</div>
                       </div>
                     </a>
                   </div>
 
                   <div className="space-y-6">
                     <a 
-                      href="https://www.google.com/maps/search/?api=1&query=Via+Roma+1+Milano" 
+                      href={SALON_INFO.mapsUrl} 
                       target="_blank" 
                       rel="noreferrer"
                       className="flex items-center gap-4 group hover:bg-gray-50 p-3 -m-3 rounded-2xl transition-all"
@@ -1416,7 +1423,7 @@ const handleCancel = async (app: Appointment) => {
                       </div>
                       <div>
                         <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Indirizzo</div>
-                        <div className="font-bold text-gray-900">Via Roma 1, 20121 Milano (MI)</div>
+                        <div className="font-bold text-gray-900">{SALON_INFO.address}</div>
                         <div className="text-xs text-emerald-600 font-bold mt-1">Apri nel navigatore →</div>
                       </div>
                     </a>

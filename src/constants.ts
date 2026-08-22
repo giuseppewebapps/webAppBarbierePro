@@ -1,9 +1,34 @@
 import { Service } from './types';
 
 export const SERVICES: Service[] = [
-  { id: 'taglio', name: 'Taglio e shampoo', price: 18, duration: 45 },
-  { id: 'barba', name: 'Taglio, shampoo e barba', price: 24, duration: 60 },
-  { id: 'shampoo', name: 'Shampoo e acconciatura', price: 10, duration: 15 },
+  { 
+    id: 'taglio', 
+    name: 'Taglio e shampoo', 
+    description: 'Taglio su misura con lavaggio e rifinitura, per un look sempre curato e definito.',
+    price: 18, 
+    duration: 45 
+  },
+  { 
+    id: 'barba', 
+    name: 'Taglio, shampoo e barba', 
+    description: 'Pacchetto relax: shampoo, taglio personalizzato e rifinitura barba per uno stile impeccabile.',
+    price: 25, 
+    duration: 60 
+  },
+  { 
+    id: 'solo_barba', 
+    name: 'Barba', 
+    description: 'Rasatura completa o rifinitura sagomata per una barba ordinata, precisa e sempre valorizzata.',
+    price: 10, 
+    duration: 20 
+  },
+  { 
+    id: 'shampoo', 
+    name: 'Shampoo e acconciatura', 
+    description: 'Lavaggio, asciugatura e styling su misura. Perfetto per capelli curati in ogni occasione.*Prezzo variabile',
+    price: 10, 
+    duration: 15 
+  }
 ];
 
 export const OPENING_HOURS = [
@@ -14,9 +39,19 @@ export const OPENING_HOURS = [
 export const CLOSED_DAYS = [0, 1]; // 0 = Sunday, 1 = Monday
 
 export const BARBER_EMAILS = [
+  'do.maldera@libero.it',
   'eaglewealth.fs@gmail.com',
   'malderadomenico98@gmail.com',
 ];
+
+export const SALON_INFO = {
+  phone: "+39 327 141 3594",
+  whatsapp: "393271413594",
+  instagram: "@_medo_hs",
+  instagramUrl: "https://www.instagram.com/_medo_hs?igsi=cHp0NWI4ZjdrejJ3",
+  address: "Piazza Mentana, 13, 70033 Corato BA",
+  mapsUrl: "https://maps.app.goo.gl/eU1pZovvLLYeVqv78"
+};
 
 export const COUNTRY_CODES = [
   { code: 'IT', name: 'Italia', dial_code: '+39', flag: '🇮🇹' },
