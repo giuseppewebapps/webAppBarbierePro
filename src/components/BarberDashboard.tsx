@@ -467,18 +467,19 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
   };
 
   const findCandidatesForGap = (gap: { start: Date, end: Date, appointmentId: string }) => {
+    // 1. Calcola quanto dura esattamente il buco da riempire (in minuti)
     const gapDuration = (gap.end.getTime() - gap.start.getTime()) / (1000 * 60);
     
-    // Candidates are people with appointments AFTER this gap
-    // Sorted by date (today first, then future)
+    // 2. Cerca i candidati perfetti
     const candidates = appointments.filter(app => {
       const appStart = app.startTime.toDate();
       const appDuration = (app.endTime.toDate().getTime() - app.startTime.toDate().getTime()) / (1000 * 60);
       
-      return app.status === 'booked' && 
-             isAfter(appStart, gap.end) && 
-             appDuration <= gapDuration;
-    }).sort((a, b) => a.startTime.toMillis() - b.startTime.toMillis());
+      return app.status === 'booked' && // Deve essere un appuntamento valido
+             isAfter(appStart, currentTime) && // Deve avvenire DOPO il momento attuale
+             appDuration === gapDuration && // La durata deve essere IDENTICA al buco
+             app.id !== gap.appointmentId; // Sicurezza: esclude il buco stesso
+    }).sort((a, b) => a.startTime.toMillis() - b.startTime.toMillis()); // Ordina dal più vicino al più lontano
     
     setRescheduleCandidates(candidates);
     setShowGapFiller(gap);
