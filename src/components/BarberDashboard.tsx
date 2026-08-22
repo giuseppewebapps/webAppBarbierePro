@@ -64,6 +64,7 @@ import { generateWhatsAppLink } from '../utils/whatsapp';
 import { SERVICES, OPENING_HOURS, CLOSED_DAYS, COUNTRY_CODES } from '../constants';
 import { cn } from '../lib/utils';
 import { RescheduleProposal } from '../types';
+import ScheduleMaintenanceModal from './ScheduleMaintenanceModal';
 
 enum OperationType {
   CREATE = 'create',
@@ -116,6 +117,7 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
   const [rescheduleCandidates, setRescheduleCandidates] = useState<(Appointment & { customer?: UserProfile })[]>([]);
   const [selectedCandidates, setSelectedCandidates] = useState<string[]>([]);
   const [isManualBookingOpen, setIsManualBookingOpen] = useState(false);
+  const [isScheduleMaintenanceOpen, setIsScheduleMaintenanceOpen] = useState(false);
   const [viewMode, setViewMode] = useState<'daily' | 'weekly' | 'monthly'>('daily');
   const [searchTerm, setSearchTerm] = useState('');
   const [highlightedAppId, setHighlightedAppId] = useState<string | null>(null);
@@ -124,7 +126,7 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
 
   useEffect(() => {
     const handleOpenManualBooking = () => setIsManualBookingOpen(true);
-    const handleOpenScheduleMaintenance = () => alert("Manutenzione orari in arrivo...");
+    const handleOpenScheduleMaintenance = () => setIsScheduleMaintenanceOpen(true);
 
     window.addEventListener('open-manual-booking', handleOpenManualBooking);
     window.addEventListener('open-schedule-maintenance', handleOpenScheduleMaintenance);
@@ -990,6 +992,10 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
             // The onSnapshot will handle the update
           }}
         />
+      )}
+
+      {isScheduleMaintenanceOpen && (
+        <ScheduleMaintenanceModal onClose={() => setIsScheduleMaintenanceOpen(false)} />
       )}
     </div>
   );

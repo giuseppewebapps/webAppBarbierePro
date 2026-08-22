@@ -179,6 +179,7 @@ export default function CustomerBooking({
   const { profile } = useAuth();
 
   const [selectedServices, setSelectedServices] = useState<Service[]>([]);
+  const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
   
   const next7Days = useMemo(() => {
     const days = eachDayOfInterval({
@@ -199,7 +200,7 @@ export default function CustomerBooking({
     });
   }, [specialDays]); // Ricalcola se cambiano le eccezioni!
 
-  const [selectedDate, setSelectedDate] = useState<Date>(next7Days[0]);
+  const [selectedDate, setSelectedDate] = useState<Date>(next7Days[0] || new Date());
   const [availableSlots, setAvailableSlots] = useState<Date[]>([]);
   const [selectedSlot, setSelectedSlot] = useState<Date | null>(null);
   
@@ -214,7 +215,6 @@ export default function CustomerBooking({
   const [showCancelConfirm, setShowCancelConfirm] = useState<Appointment | null>(null);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [activeTab, setActiveTab] = useState<'booking' | 'appointments' | 'contacts'>('booking');
-  const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
 
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 10000);

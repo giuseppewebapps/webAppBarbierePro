@@ -122,6 +122,14 @@ service cloud.firestore {
       allow write: if isAdmin() && isValidContact(request.resource.data);
     }
 
+    // ===============================================================
+    // NUOVE REGOLE: ECCEZIONI DEL CALENDARIO
+    // ===============================================================
+    match /calendar_exceptions/{exceptionDate} {
+      allow read: if true; // Tutti possono leggere se il negozio è aperto o chiuso
+      allow write: if isAdmin(); // Solo i barbieri (o admin) possono modificare
+    }
+
     match /test/connection {
       allow read: if true;
     }
