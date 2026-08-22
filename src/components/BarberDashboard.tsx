@@ -108,6 +108,7 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
   const [loading, setLoading] = useState(true);
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [selectedAppointment, setSelectedAppointment] = useState<(Appointment & { customer?: UserProfile }) | null>(null);
+  const [activeNotifType, setActiveNotifType] = useState<string | null>(null);
   const [showContactMenu, setShowContactMenu] = useState(false);
   const [showCancelConfirm, setShowCancelConfirm] = useState<Appointment | null>(null);
   const [showGapFiller, setShowGapFiller] = useState<{ start: Date, end: Date, appointmentId: string } | null>(null);
@@ -261,6 +262,8 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
         // 1. Sposta magicamente il calendario al giorno dell'appuntamento
         setSelectedDate(foundApp.startTime.toDate());
         
+        setActiveNotifType(selectedNotificationType || null);
+
         // 2. Apre il popup di dettaglio
         setSelectedAppointment(foundApp);
 
@@ -284,7 +287,7 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
         if (onAppointmentDialogClose) onAppointmentDialogClose();
       }
     }
-  }, [selectedAppointmentId, appointments, onAppointmentDialogClose]);
+  }, [selectedAppointmentId, appointments, onAppointmentDialogClose, selectedNotificationType]);
 
   // Ascolta le notifiche speciali di rifiuto
   useEffect(() => {
@@ -725,6 +728,7 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
               <h3 className="text-xl font-bold">Dettagli Appuntamento</h3>
               <button onClick={() => {
                 setSelectedAppointment(null);
+                setActiveNotifType(null);
                 setShowContactMenu(false);
               }} className="p-1 hover:bg-white/10 rounded-full">
                 <XCircle size={24} />
@@ -816,12 +820,12 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
                 {/* INIZIO NUOVO BOTTONE WHATSAPP DINAMICO */}
                 <WhatsAppButton 
                   type={
-                    selectedNotificationType === 'booking' ? 'booking' :
-                    selectedNotificationType === 'cancellation' ? 'cancellation' :
-                    selectedNotificationType === 'proposal_accepted' ? 'proposal_accepted' :
+                    activeNotifType === 'booking' ? 'booking' :
+                    activeNotifType === 'cancellation' ? 'cancellation' :
+                    activeNotifType === 'proposal_accepted' ? 'proposal_accepted' :
                     'manual_management_required'
                   }
-                  customerName={
+                 customerName={
                     selectedAppointment.isForFriend 
                       ? selectedAppointment.friendDetails?.firstName || 'Cliente'
                       : selectedAppointment.customer?.displayName || 'Cliente'
@@ -834,9 +838,9 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
                   date={format(selectedAppointment.startTime.toDate(), 'dd/MM/yyyy')}
                   time={format(selectedAppointment.startTime.toDate(), 'HH:mm')}
                   label={
-                    selectedNotificationType === 'booking' ? 'Conferma su WhatsApp' :
-                    selectedNotificationType === 'cancellation' ? 'Saluta su WhatsApp' :
-                    selectedNotificationType === 'proposal_accepted' ? 'Conferma Cambio' :
+                    activeNotifType === 'booking' ? 'Conferma su WhatsApp' :
+                    activeNotifType === 'cancellation' ? 'Saluta su WhatsApp' :
+                    activeNotifType === 'proposal_accepted' ? 'Conferma Cambio' :
                     'Chat Gestione Manuale'
                   }
                   className="w-full py-4 bg-[#25D366] text-white rounded-2xl font-bold hover:bg-[#20bd5a] transition-all flex items-center justify-center gap-2 shadow-md mb-2"
@@ -878,6 +882,7 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
                 <button
                   onClick={() => {
                     setSelectedAppointment(null);
+                    setActiveNotifType(null);
                     setShowContactMenu(false);
                   }}
                   className="w-full py-4 bg-gray-100 text-gray-600 rounded-2xl font-bold hover:bg-gray-200 transition-all"
