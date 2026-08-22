@@ -76,3 +76,10 @@ export interface CountryCode {
   name: string;
   dial_code: string;
 }
+
+export interface SpecialDay {
+  id?: string;
+  date: string; // Formato 'YYYY-MM-DD' (es. '2024-08-14') per facilitare la ricerca
+  isClosed: boolean; // true = chiuso tutto il giorno, false = orario personalizzato
+  openingHours?: { start: number; end: number }[]; // Es. [{start: 8, end: 14}]
+}

@@ -16,7 +16,7 @@ import {
 import { db, auth } from '../firebase';
 import { useAuth } from '../App';
 import { SERVICES, OPENING_HOURS, CLOSED_DAYS, COUNTRY_CODES, BARBER_EMAILS, SALON_INFO } from '../constants';
-import { Appointment, Service, RescheduleProposal } from '../types';
+import { Appointment, Service, RescheduleProposal, SpecialDay } from '../types';
 import { 
   format, 
   addMinutes, 
@@ -180,10 +180,24 @@ export default function CustomerBooking({
 
   const [selectedServices, setSelectedServices] = useState<Service[]>([]);
   
-  const next7Days = useMemo(() => eachDayOfInterval({
-    start: new Date(),
-    end: addDays(new Date(), 30)
-  }).filter(d => !CLOSED_DAYS.includes(getDay(d))), []);
+  const next7Days = useMemo(() => {
+    const days = eachDayOfInterval({
+      start: new Date(),
+      end: addDays(new Date(), 30)
+    });
+    
+    return days.filter(d => {
+      const dateString = format(d, 'yyyy-MM-dd');
+      const exception = specialDays.find(ex => ex.date === dateString);
+      
+      // Se c'è un'eccezione, mostra il giorno SOLO SE non è impostato come chiusura totale
+      if (exception) {
+        return !exception.isClosed;
+      }
+      // Altrimenti, segui le regole standard di chiusura
+      return !CLOSED_DAYS.includes(getDay(d));
+    });
+  }, [specialDays]); // Ricalcola se cambiano le eccezioni!
 
   const [selectedDate, setSelectedDate] = useState<Date>(next7Days[0]);
   const [availableSlots, setAvailableSlots] = useState<Date[]>([]);
@@ -200,6 +214,7 @@ export default function CustomerBooking({
   const [showCancelConfirm, setShowCancelConfirm] = useState<Appointment | null>(null);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [activeTab, setActiveTab] = useState<'booking' | 'appointments' | 'contacts'>('booking');
+  const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
 
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 10000);
@@ -340,16 +355,38 @@ export default function CustomerBooking({
     }
   }, [selectedAppointmentId, onAppointmentDialogClose]);
 
+// Ascolta le eccezioni del calendario in tempo reale
+  useEffect(() => {
+    const q = query(collection(db, 'calendar_exceptions'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const docs = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as SpecialDay[];
+      setSpecialDays(docs);
+    });
+    return () => unsubscribe();
+  }, []);
+
   const calculateSlots = async () => {
     setLoading(true);
     const dayStart = startOfDay(selectedDate);
     const dayEnd = endOfDay(selectedDate);
+    
+    const dateString = format(selectedDate, 'yyyy-MM-dd');
+    
+    // Legge le eccezioni vere scaricate da Firebase!
+    const exceptionForToday = specialDays.find(ex => ex.date === dateString);
 
-    if (CLOSED_DAYS.includes(getDay(selectedDate))) {
+    // 1. Controllo Chiusura
+    if (exceptionForToday?.isClosed || (!exceptionForToday && CLOSED_DAYS.includes(getDay(selectedDate)))) {
       setAvailableSlots([]);
       setLoading(false);
       return;
     }
+
+    // 2. Seleziona gli orari da usare
+    const activeOpeningHours = exceptionForToday?.openingHours || OPENING_HOURS;
 
     try {
       const q = query(
@@ -365,7 +402,8 @@ export default function CustomerBooking({
       const totalDuration = selectedServices.reduce((acc, s) => acc + s.duration, 0);
       const slots: Date[] = [];
 
-      OPENING_HOURS.forEach(range => {
+      // 3. Il ciclo usa 'activeOpeningHours' invece del vecchio OPENING_HOURS
+      activeOpeningHours.forEach(range => {
         let current = setMinutes(setHours(dayStart, range.start), 0);
         const rangeEnd = setMinutes(setHours(dayStart, range.end), 0);
 
