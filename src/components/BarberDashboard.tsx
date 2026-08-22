@@ -60,6 +60,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../App';
 import { WhatsAppButton } from './WhatsAppButton';
+import { generateWhatsAppLink } from '../utils/whatsapp';
 import { SERVICES, OPENING_HOURS, CLOSED_DAYS, COUNTRY_CODES } from '../constants';
 import { cn } from '../lib/utils';
 import { RescheduleProposal } from '../types';
@@ -1010,6 +1011,7 @@ function ManualBookingModal({ onClose, onSuccess }: ManualBookingModalProps) {
   const [availableSlots, setAvailableSlots] = useState<Date[]>([]);
   const [selectedSlot, setSelectedSlot] = useState<Date | null>(null);
   const [loading, setLoading] = useState(false);
+  const [sendWhatsApp, setSendWhatsApp] = useState(true);
   const [suggestions, setSuggestions] = useState<{ firstName: string, lastName: string, phone: string, email?: string, phonePrefix?: string }[]>([]);
   // Search for contacts as the barber types
   useEffect(() => {
@@ -1172,6 +1174,21 @@ function ManualBookingModal({ onClose, onSuccess }: ManualBookingModalProps) {
         createdAt: Timestamp.now(),
         isManual: true
       });
+
+      // SE LA SPUNTA È ATTIVA, CREA E APRI IL LINK WHATSAPP
+      if (sendWhatsApp) {
+        const link = generateWhatsAppLink(
+          'booking', 
+          firstName, 
+          phonePrefix + phone, 
+          format(selectedSlot, 'dd/MM/yyyy'), 
+          format(selectedSlot, 'HH:mm')
+        );
+        if (link) {
+          window.open(link, '_blank');
+        }
+      }
+
       onSuccess();
     } catch (error) {
       console.error("Error booking:", error);
@@ -1393,6 +1410,22 @@ function ManualBookingModal({ onClose, onSuccess }: ManualBookingModalProps) {
         </div>
 
         <div className="p-6 border-t border-gray-100 bg-gray-50/50">
+          
+          {/* NUOVO CHECKBOX WHATSAPP */}
+          <div className="flex items-center gap-3 mb-4 px-2">
+            <input
+              type="checkbox"
+              id="sendWhatsApp"
+              checked={sendWhatsApp}
+              onChange={(e) => setSendWhatsApp(e.target.checked)}
+              className="w-5 h-5 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+            />
+            <label htmlFor="sendWhatsApp" className="text-sm font-bold text-gray-700 cursor-pointer flex items-center gap-2">
+              Avvisa il cliente su WhatsApp 
+              <MessageCircle size={18} className="text-[#25D366]" />
+            </label>
+          </div>
+
           <button
             disabled={loading || !firstName || !lastName || !phone || !selectedSlot || selectedServices.length === 0}
             onClick={handleBooking}
