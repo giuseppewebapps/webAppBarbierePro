@@ -123,6 +123,7 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
   const [highlightedAppId, setHighlightedAppId] = useState<string | null>(null);
   const [isSearchActive, setIsSearchActive] = useState(false);
   const [declinedProposalNotif, setDeclinedProposalNotif] = useState<any>(null);
+  const [isReminderModalOpen, setIsReminderModalOpen] = useState(false);
 
   useEffect(() => {
     const handleOpenManualBooking = () => setIsManualBookingOpen(true);
@@ -492,75 +493,89 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
     );
   };
 
+// --- CALCOLO CLIENTI DI DOMANI ---
+  const tomorrow = addDays(new Date(), 1);
+  const tomorrowsAppointments = appointments.filter(app => 
+    isSameDay(app.startTime.toDate(), tomorrow) && app.status === 'booked'
+  ).sort((a, b) => a.startTime.toMillis() - b.startTime.toMillis());
+  // ---------------------------------
+
   if (loading) {
     return <div className="text-center py-12">Caricamento dashboard...</div>;
   }
 
-  // qui per cambiare la gestione account barbiere
+// qui per cambiare la gestione account barbiere
   return (
     <div className="space-y-8 max-w-4xl mx-auto pb-12 px-4 sm:px-0">
       <div className="bg-white/80 backdrop-blur-md border border-white/20 rounded-3xl overflow-hidden shadow-2xl">
-        <div className="p-6 border-b border-gray-100/50 flex items-center justify-between">
-          <div className="flex items-center gap-4">
+        
+        {/* INTESTAZIONE RESPONSIVE */}
+        <div className="p-4 sm:p-6 border-b border-gray-100/50 flex flex-col xl:flex-row items-center justify-between gap-4 sm:gap-6">
+          
+          {/* Parte Sinistra: Selettore Data */}
+          <div className="flex items-center justify-between w-full xl:w-auto gap-2 sm:gap-4">
             <button onClick={() => setSelectedDate(subDays(selectedDate, 1))} className="p-2 hover:bg-gray-50 rounded-full"><ChevronLeft size={20} /></button>
-            <h3 className="text-xl font-bold min-w-[200px] text-center">
+            <h3 className="text-lg sm:text-xl font-bold min-w-[150px] sm:min-w-[200px] text-center">
               {format(selectedDate, 'EEEE d MMMM', { locale: it })}
             </h3>
             <button onClick={() => setSelectedDate(addDays(selectedDate, 1))} className="p-2 hover:bg-gray-50 rounded-full"><ChevronRight size={20} /></button>
           </div>
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2 bg-gray-100 rounded-xl px-3 py-2">
+
+          {/* Parte Destra: Controlli e Bottoni */}
+          <div className="flex flex-wrap items-center justify-center xl:justify-end gap-3 sm:gap-4 w-full xl:w-auto">
+            
+            {/* Tasti Visualizzazione */}
+            <div className="flex items-center gap-1 sm:gap-2 bg-gray-100 rounded-xl px-2 py-1.5 sm:px-3 sm:py-2">
               <button
                 onClick={() => setViewMode('daily')}
-                className={cn(
-                  "px-3 py-1 rounded-lg text-xs font-bold transition-all",
-                  viewMode === 'daily' ? "bg-black text-white" : "text-gray-600 hover:bg-gray-200"
-                )}
+                className={cn("px-2 py-1 sm:px-3 sm:py-1 rounded-lg text-[10px] sm:text-xs font-bold transition-all", viewMode === 'daily' ? "bg-black text-white" : "text-gray-600 hover:bg-gray-200")}
               >
                 Giorno
               </button>
               <button
                 onClick={() => setViewMode('weekly')}
-                className={cn(
-                  "px-3 py-1 rounded-lg text-xs font-bold transition-all",
-                  viewMode === 'weekly' ? "bg-black text-white" : "text-gray-600 hover:bg-gray-200"
-                )}
+                className={cn("px-2 py-1 sm:px-3 sm:py-1 rounded-lg text-[10px] sm:text-xs font-bold transition-all", viewMode === 'weekly' ? "bg-black text-white" : "text-gray-600 hover:bg-gray-200")}
               >
                 Settimana
               </button>
               <button
                 onClick={() => setViewMode('monthly')}
-                className={cn(
-                  "px-3 py-1 rounded-lg text-xs font-bold transition-all",
-                  viewMode === 'monthly' ? "bg-black text-white" : "text-gray-600 hover:bg-gray-200"
-                )}
+                className={cn("px-2 py-1 sm:px-3 sm:py-1 rounded-lg text-[10px] sm:text-xs font-bold transition-all", viewMode === 'monthly' ? "bg-black text-white" : "text-gray-600 hover:bg-gray-200")}
               >
                 Mese
               </button>
             </div>
-            <div className="relative">
+            
+            {/* Ricerca */}
+            <div className="relative flex-1 min-w-[130px] max-w-[200px]">
               <input
                 type="text"
                 placeholder="Cerca cliente..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 onFocus={() => setIsSearchActive(true)}
-                className={cn(
-                  "pl-10 pr-4 py-2 w-48 text-sm rounded-xl border transition-all",
-                  isSearchActive ? "border-black ring-2 ring-black/20" : "border-gray-200 hover:border-gray-300"
-                )}
+                className={cn("pl-8 pr-3 py-2 w-full text-xs sm:text-sm rounded-xl border transition-all outline-none", isSearchActive ? "border-black ring-2 ring-black/20" : "border-gray-200 hover:border-gray-300")}
               />
-              <Search
-                size={18}
-                className={cn(
-                  "absolute left-3 top-1/2 -translate-y-1/2 transition-colors",
-                  isSearchActive ? "text-black" : "text-gray-400"
-                )}
-              />
+              <Search size={16} className={cn("absolute left-2.5 top-1/2 -translate-y-1/2 transition-colors", isSearchActive ? "text-black" : "text-gray-400")} />
             </div>
-            <button onClick={() => setSelectedDate(new Date())} className="text-sm font-bold text-gray-400 hover:text-black">Oggi</button>
+            
+            {/* Bottoni Oggi & Promemoria */}
+            <div className="flex items-center gap-2 sm:gap-3">
+              <button onClick={() => setSelectedDate(new Date())} className="text-xs sm:text-sm font-bold text-gray-400 hover:text-black">Oggi</button>
+              
+              <button 
+                onClick={() => setIsReminderModalOpen(true)} 
+                className="flex items-center gap-1.5 sm:gap-2 px-3 py-2 bg-[#25D366]/10 text-[#25D366] text-xs font-bold rounded-xl hover:bg-[#25D366]/20 transition-all shadow-sm"
+              >
+                <MessageCircle size={16} /> 
+                <span className="hidden sm:inline">Promemoria</span>
+                <span className="sm:hidden">Invia</span>
+              </button>
+            </div>
+
           </div>
         </div>
+        {/* FINE INTESTAZIONE RESPONSIVE */}
 
         {/* Selection Mode Header */}
         {showGapFiller && (
@@ -618,7 +633,7 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
                   ) : (
                     apps.map(app => {
                       const duration = (app.endTime.toDate().getTime() - app.startTime.toDate().getTime()) / (1000 * 60);
-                      const cardWidth = (duration / 30) * 14; // 14rem is w-56
+                      const cardWidth = (duration / 30) * 14; 
                       
                       const isCandidate = rescheduleCandidates.some(c => c.id === app.id);
                       const isSelected = selectedCandidates.includes(app.id!);
@@ -638,10 +653,7 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
                           style={{ width: `${cardWidth}rem` }}
                           className={cn(
                             "flex-shrink-0 p-2.5 rounded-xl shadow-md flex flex-col justify-between text-left transition-all cursor-pointer relative h-[88px] duration-500",
-                            
-                            // EFFETTO BAGLIORE SE EVIDENZIATO
                             app.id === highlightedAppId ? (app.status === 'cancelled' ? "ring-4 ring-red-500 shadow-[0_0_30px_rgba(239,68,68,0.7)] scale-[1.05] z-20 grayscale-0 opacity-100" : "ring-4 ring-emerald-500 shadow-[0_0_30px_rgba(16,185,129,0.6)] scale-[1.05] z-20") : "hover:scale-[1.02]",
-                            
                             selectionMode && !isCandidate ? "bg-gray-100 text-gray-400 grayscale shadow-none border-gray-200" :
                             isSelected ? "bg-emerald-500 text-white ring-4 ring-emerald-500/30" :
                             (app.status === 'completed' || (app.status === 'booked' && isBefore(app.endTime.toDate(), currentTime))) ? "bg-emerald-600 text-white" :
@@ -979,6 +991,76 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
               >
                 Chiudi
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+{/* Modal Promemoria WhatsApp */}
+      {isReminderModalOpen && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[9999] p-4 animate-in fade-in">
+          <div className="bg-white w-full max-w-lg rounded-[32px] overflow-hidden shadow-2xl flex flex-col max-h-[85vh]">
+            <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-[#25D366] text-white">
+              <div className="flex items-center gap-3">
+                <MessageCircle size={24} />
+                <div>
+                  <h3 className="text-lg font-bold">Promemoria di Domani</h3>
+                  <p className="text-xs opacity-90">{format(tomorrow, 'EEEE d MMMM', { locale: it })}</p>
+                </div>
+              </div>
+              <button onClick={() => setIsReminderModalOpen(false)} className="p-1 hover:bg-white/20 rounded-full transition-colors">
+                <XCircle size={24} />
+              </button>
+            </div>
+            
+            <div className="flex-1 overflow-y-auto p-2">
+              {tomorrowsAppointments.length === 0 ? (
+                <div className="p-8 text-center text-gray-400 font-medium">
+                  Nessun appuntamento confermato per domani.
+                </div>
+              ) : (
+                <div className="divide-y divide-gray-50">
+                  {tomorrowsAppointments.map(app => {
+                    // Protezioni Antiproiettile
+                    const phone = (app.isForFriend ? app.friendDetails?.phone : app.customer?.phoneNumber) || '';
+                    const name = (app.isForFriend ? app.friendDetails?.firstName : app.customer?.displayName) || 'Cliente';
+                    const time = app.startTime?.toDate ? format(app.startTime.toDate(), 'HH:mm') : '--:--';
+                    
+                    const servicesList = app.services && Array.isArray(app.services) 
+                      ? app.services.map(s => s.name).join(', ') 
+                      : 'Appuntamento';
+
+                    const message = `💈 Medo Hair Salon ti ricorda l’appuntamento di domani alle ore ${time}!`;
+                    const waLink = phone ? `https://wa.me/${phone.replace(/\D/g, '')}?text=${encodeURIComponent(message)}` : '#';
+
+                    return (
+                      <div key={app.id} className="p-4 flex items-center justify-between hover:bg-gray-50 transition-colors">
+                        <div>
+                          <div className="font-bold text-sm text-gray-900">{name}</div>
+                          <div className="text-xs text-gray-500 font-medium mt-0.5">Ore {time} • {servicesList}</div>
+                        </div>
+                        <a 
+                          href={waLink} 
+                          target="_blank" 
+                          rel="noreferrer"
+                          onClick={(e) => {
+                            if (!phone) {
+                              e.preventDefault();
+                              alert("Numero di telefono mancante per questo cliente.");
+                            }
+                          }}
+                          className={cn(
+                            "flex items-center gap-2 px-4 py-2 text-xs font-bold rounded-xl transition-all shadow-sm",
+                            phone ? "bg-[#25D366] text-white hover:bg-[#20bd5a]" : "bg-gray-100 text-gray-400 cursor-not-allowed"
+                          )}
+                        >
+                          <Send size={14} /> Invia
+                        </a>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </div>
         </div>
