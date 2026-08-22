@@ -1255,9 +1255,25 @@ const next30Days = React.useMemo(() => {
     const totalDuration = selectedServices.reduce((acc, s) => acc + s.duration, 0);
     const totalAmount = selectedServices.reduce((acc, s) => acc + s.price, 0);
     const endTime = addMinutes(selectedSlot, totalDuration);
+    const fullPhoneNumber = phonePrefix + phone;
 
     try {
-      // Save/Update contact with lowercase fields for case-insensitive search
+      // 1. RICERCA UTENTE ESISTENTE (La Magia)
+      let finalCustomerId = 'manual_entry';
+      let isRegisteredUser = false;
+
+      const usersRef = collection(db, 'users');
+      // Cerchiamo se c'è un utente registrato con questo stesso numero di telefono
+      const userQuery = query(usersRef, where('phoneNumber', '==', fullPhoneNumber), limit(1));
+      const userSnapshot = await getDocs(userQuery);
+
+      if (!userSnapshot.empty) {
+        // Trovato! Sostituiamo 'manual_entry' con il suo vero ID
+        finalCustomerId = userSnapshot.docs[0].id;
+        isRegisteredUser = true;
+      }
+
+      // 2. Salva/Aggiorna in rubrica locale (contacts)
       const contactId = `${firstName.toLowerCase()}_${lastName.toLowerCase()}`;
       await setDoc(doc(db, 'contacts', contactId), {
         firstName,
@@ -1270,7 +1286,7 @@ const next30Days = React.useMemo(() => {
         updatedAt: Timestamp.now()
       }, { merge: true });
 
-      // Check for cancelled appointments in the same slot to delete them
+      // 3. Controllo buchi/cancellati e pulizia
       const q = query(
         collection(db, 'appointments'),
         where('startTime', '==', Timestamp.fromDate(selectedSlot)),
@@ -1281,11 +1297,12 @@ const next30Days = React.useMemo(() => {
         await deleteDoc(doc(db, 'appointments', d.id));
       }
 
-      await addDoc(collection(db, 'appointments'), {
-        customerId: 'manual_entry',
+      // 4. CREAZIONE APPUNTAMENTO
+      const newAppointmentRef = await addDoc(collection(db, 'appointments'), {
+        customerId: finalCustomerId, // <-- Qui usiamo l'ID vero se esiste!
         customer: {
           displayName: `${firstName} ${lastName}`,
-          phoneNumber: phonePrefix + phone,
+          phoneNumber: fullPhoneNumber,
           email: email || ''
         },
         services: selectedServices,
@@ -1294,15 +1311,28 @@ const next30Days = React.useMemo(() => {
         status: 'booked',
         totalAmount: totalAmount,
         createdAt: Timestamp.now(),
-        isManual: true
+        isManual: true // <-- Manteniamo questo flag per le statistiche del barbiere
       });
 
-      // SE LA SPUNTA È ATTIVA, CREA E APRI IL LINK WHATSAPP
+      // 5. INVIO NOTIFICA PUSH/IN-APP (Solo se è registrato)
+      if (isRegisteredUser) {
+        await addDoc(collection(db, 'notifications'), {
+        userId: finalCustomerId,
+        title: 'Nuovo Appuntamento Fissato',
+        message: `Il barbiere ha inserito un appuntamento per te il ${format(selectedSlot, 'd MMM')} alle ${format(selectedSlot, 'HH:mm')}`,
+        type: 'booking',
+        read: false,
+        createdAt: Timestamp.now(),
+        appointmentId: newAppointmentRef.id
+  });
+}
+
+      // 6. WHATSAPP (Se la spunta è attiva)
       if (sendWhatsApp) {
         const link = generateWhatsAppLink(
           'booking', 
           firstName, 
-          phonePrefix + phone, 
+          fullPhoneNumber, 
           format(selectedSlot, 'dd/MM/yyyy'), 
           format(selectedSlot, 'HH:mm')
         );
