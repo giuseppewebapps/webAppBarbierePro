@@ -55,9 +55,11 @@ import {
   Plus,
   User,
   ChevronDown,
-  Search
+  Search,
+  MessageCircle
 } from 'lucide-react';
 import { useAuth } from '../App';
+import { WhatsAppButton } from './WhatsAppButton';
 import { SERVICES, OPENING_HOURS, CLOSED_DAYS, COUNTRY_CODES } from '../constants';
 import { cn } from '../lib/utils';
 import { RescheduleProposal } from '../types';
@@ -96,10 +98,11 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
 
 interface BarberDashboardProps {
   selectedAppointmentId?: string | null;
+  selectedNotificationType?: string | null;
   onAppointmentDialogClose?: () => void;
 }
 
-export default function BarberDashboard({ selectedAppointmentId, onAppointmentDialogClose }: BarberDashboardProps) {
+export default function BarberDashboard({ selectedAppointmentId, selectedNotificationType, onAppointmentDialogClose }: BarberDashboardProps) {
   const { profile } = useAuth();
   const [appointments, setAppointments] = useState<(Appointment & { customer?: UserProfile })[]>([]);
   const [loading, setLoading] = useState(true);
@@ -809,6 +812,38 @@ export default function BarberDashboard({ selectedAppointmentId, onAppointmentDi
               </div>
 
               <div className="pt-6 border-t border-gray-100 flex flex-col gap-3">
+                
+                {/* INIZIO NUOVO BOTTONE WHATSAPP DINAMICO */}
+                <WhatsAppButton 
+                  type={
+                    selectedNotificationType === 'booking' ? 'booking' :
+                    selectedNotificationType === 'cancellation' ? 'cancellation' :
+                    selectedNotificationType === 'proposal_accepted' ? 'proposal_accepted' :
+                    'manual_management_required'
+                  }
+                  customerName={
+                    selectedAppointment.isForFriend 
+                      ? selectedAppointment.friendDetails?.firstName || 'Cliente'
+                      : selectedAppointment.customer?.displayName || 'Cliente'
+                  }
+                  customerPhone={
+                    selectedAppointment.isForFriend 
+                      ? selectedAppointment.friendDetails?.phone 
+                      : selectedAppointment.customer?.phoneNumber
+                  }
+                  date={format(selectedAppointment.startTime.toDate(), 'dd/MM/yyyy')}
+                  time={format(selectedAppointment.startTime.toDate(), 'HH:mm')}
+                  label={
+                    selectedNotificationType === 'booking' ? 'Conferma su WhatsApp' :
+                    selectedNotificationType === 'cancellation' ? 'Saluta su WhatsApp' :
+                    selectedNotificationType === 'proposal_accepted' ? 'Conferma Cambio' :
+                    'Chat Gestione Manuale'
+                  }
+                  className="w-full py-4 bg-[#25D366] text-white rounded-2xl font-bold hover:bg-[#20bd5a] transition-all flex items-center justify-center gap-2 shadow-md mb-2"
+                />
+                {/* FINE NUOVO BOTTONE WHATSAPP DINAMICO */}
+
+                {/* Tasto Annulla (Solo se prenotato e futuro) */}
                 {selectedAppointment.status === 'booked' && !isBefore(selectedAppointment.startTime.toDate(), currentTime) && (
                   <button
                     onClick={() => {
@@ -821,6 +856,7 @@ export default function BarberDashboard({ selectedAppointmentId, onAppointmentDi
                   </button>
                 )}
                 
+                {/* Tasto Proponi Cambio (Solo se annullato) */}
                 {selectedAppointment.status === 'cancelled' && (
                   <button
                     disabled={isBefore(selectedAppointment.startTime.toDate(), currentTime)}
@@ -838,6 +874,7 @@ export default function BarberDashboard({ selectedAppointmentId, onAppointmentDi
                   </button>
                 )}
 
+                {/* Tasto Chiudi */}
                 <button
                   onClick={() => {
                     setSelectedAppointment(null);
@@ -914,12 +951,26 @@ export default function BarberDashboard({ selectedAppointmentId, onAppointmentDi
               </div>
             </div>
 
-            <button
-              onClick={() => setDeclinedProposalNotif(null)}
-              className="w-full py-4 bg-gray-100 text-gray-600 rounded-2xl font-bold hover:bg-gray-200 hover:text-black transition-all"
-            >
-              Chiudi
-            </button>
+            <div className="flex flex-col gap-3 mt-4">
+              {declinedProposalNotif.declinedDetails?.customerPhone && (
+                <WhatsAppButton
+                  type="proposal_declined"
+                  customerName={declinedProposalNotif.declinedDetails.customerName}
+                  customerPhone={declinedProposalNotif.declinedDetails.customerPhone}
+                  date={declinedProposalNotif.declinedDetails.originalTime ? format(declinedProposalNotif.declinedDetails.originalTime.toDate(), 'dd/MM/yyyy') : ''}
+                  time={declinedProposalNotif.declinedDetails.originalTime ? format(declinedProposalNotif.declinedDetails.originalTime.toDate(), 'HH:mm') : ''}
+                  label="Avvisa su WhatsApp"
+                  className="w-full py-4 bg-[#25D366] text-white rounded-2xl font-bold hover:bg-[#20bd5a] transition-all flex items-center justify-center gap-2"
+                />
+              )}
+              
+              <button
+                onClick={() => setDeclinedProposalNotif(null)}
+                className="w-full py-4 bg-gray-100 text-gray-600 rounded-2xl font-bold hover:bg-gray-200 hover:text-black transition-all"
+              >
+                Chiudi
+              </button>
+            </div>
           </div>
         </div>
       )}

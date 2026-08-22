@@ -52,6 +52,7 @@ export default function App() {
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [selectedProposalId, setSelectedProposalId] = useState<string | null>(null);
   const [selectedAppointmentId, setSelectedAppointmentId] = useState<string | null>(null);
+  const [selectedNotificationType, setSelectedNotificationType] = useState<string | null>(null);
 
   // Stati per gestire l'accesso con Email e Password
   const [name, setName] = useState(''); // <--- Nuovo stato per il Nome
@@ -334,6 +335,7 @@ export default function App() {
                           setSelectedProposalId(n.proposalId);
                         } else if (n.appointmentId) {
                           setSelectedAppointmentId(n.appointmentId);
+                          setSelectedNotificationType(n.type);
                         }
                       }}
                     />
@@ -358,7 +360,14 @@ export default function App() {
             <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
               <main>
                 {profile?.role === 'barber' ? (
-                  <BarberDashboard selectedAppointmentId={selectedAppointmentId} onAppointmentDialogClose={() => setSelectedAppointmentId(null)} />
+                  <BarberDashboard 
+                    selectedAppointmentId={selectedAppointmentId} 
+                    selectedNotificationType={selectedNotificationType}
+                    onAppointmentDialogClose={() => {
+                      setSelectedAppointmentId(null);
+                      setSelectedNotificationType(null);
+                    }} 
+                  />
                 ) : (
                   <CustomerBooking 
                     selectedProposalIdFromNotification={selectedProposalId} 

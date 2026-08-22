@@ -733,24 +733,35 @@ const handleCancel = async (app: Appointment) => {
           });
         }
 
-     const appDoc = await getDoc(doc(db, 'appointments', currentTarget.appointmentId));
-        const myApp = appDoc.exists() ? (appDoc.data() as Appointment) : null;
+     // 3. Notifica i barbieri riguardo al rifiuto (con try/catch e numero di telefono per WhatsApp)
+        try {
+          const appDoc = await getDoc(doc(db, 'appointments', currentTarget.appointmentId));
+          const myApp = appDoc.exists() ? (appDoc.data() as Appointment) : null;
+          
+          // Estrapoliamo il numero in modo sicuro (amico o cliente principale)
+          const customerPhone = myApp?.isForFriend 
+            ? myApp?.friendDetails?.phone 
+            : (myApp?.customer?.phoneNumber || profile?.phoneNumber || '');
 
-        const barberSnapshot = await getDocs(query(collection(db, 'users'), where('role', '==', 'barber')));
-        for (const barberDoc of barberSnapshot.docs) {
-          await addDoc(collection(db, 'notifications'), {
-            userId: barberDoc.id,
-            title: 'Proposta Rifiutata',
-            message: `Il cliente ${profile?.displayName || 'Cliente'} ha preferito mantenere il suo orario.`,
-            type: 'proposal_declined',
-            read: false,
-            createdAt: Timestamp.now(),
-            declinedDetails: {
-              customerName: profile?.displayName || 'Cliente',
-              originalTime: myApp?.startTime || proposal.gapStartTime,
-              proposedTime: proposal.gapStartTime
-            }
-          });
+          const barberSnapshot = await getDocs(query(collection(db, 'users'), where('role', '==', 'barber')));
+          for (const barberDoc of barberSnapshot.docs) {
+            await addDoc(collection(db, 'notifications'), {
+              userId: barberDoc.id,
+              title: 'Proposta Rifiutata',
+              message: `Il cliente ${profile?.displayName || 'Cliente'} ha preferito mantenere il suo orario.`,
+              type: 'proposal_declined',
+              read: false,
+              createdAt: Timestamp.now(),
+              declinedDetails: {
+                customerName: profile?.displayName || 'Cliente',
+                customerPhone: customerPhone, // <-- Fondamentale per WhatsApp
+                originalTime: myApp?.startTime || proposal.gapStartTime,
+                proposedTime: proposal.gapStartTime
+              }
+            });
+          }
+        } catch (err) {
+          console.warn("Impossibile inviare notifica di rifiuto al barbiere:", err);
         }
       }
 
