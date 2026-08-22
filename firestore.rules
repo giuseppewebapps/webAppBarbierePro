@@ -69,8 +69,11 @@ service cloud.firestore {
       return data.userId is string &&
              data.title is string &&
              data.message is string &&
-             data.type in ['cancellation', 'booking', 'reschedule_proposal', 'manual_management_required'] &&
-             data.read is bool;
+             data.type in ['cancellation', 'booking', 'reschedule_proposal', 'manual_management_required', 'proposal_declined'] &&
+             data.read is bool &&
+             (!('appointmentId' in data) || data.appointmentId is string) &&
+             (!('proposalId' in data) || data.proposalId is string) &&
+             (!('declinedDetails' in data) || data.declinedDetails is map);
     }
 
     // ===============================================================

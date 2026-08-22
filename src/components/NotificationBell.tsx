@@ -51,6 +51,11 @@ export default function NotificationBell({ notifications, onNotificationClick }:
           if (onNotificationClick) {
             onNotificationClick(newNotif);
           }
+          // SBLOCCO POPUP SPECIALE PER NOTIFICHE PUSH
+          if (newNotif.type === 'proposal_declined') {
+            window.dispatchEvent(new CustomEvent('special-notification-click', { detail: newNotif }));
+          }
+
           // Chiudi la notifica
           notif.close();
           // Porta la finestra in primo piano
@@ -122,7 +127,13 @@ export default function NotificationBell({ notifications, onNotificationClick }:
                     key={n.id}
                     onClick={() => {
                       if (onNotificationClick) onNotificationClick(n);
+                      
+                      if (n.type === 'proposal_declined') {
+                        window.dispatchEvent(new CustomEvent('special-notification-click', { detail: n }));
+                      }
+                      
                       markAsRead(n.id!);
+                      setIsOpen(false); 
                     }}
                     className={cn(
                       "p-4 transition-colors group relative cursor-pointer hover:bg-gray-50",

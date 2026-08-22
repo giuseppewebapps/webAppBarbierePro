@@ -115,6 +115,7 @@ export default function BarberDashboard({ selectedAppointmentId, onAppointmentDi
   const [searchTerm, setSearchTerm] = useState('');
   const [highlightedAppId, setHighlightedAppId] = useState<string | null>(null);
   const [isSearchActive, setIsSearchActive] = useState(false);
+  const [declinedProposalNotif, setDeclinedProposalNotif] = useState<any>(null);
 
   useEffect(() => {
     const handleOpenManualBooking = () => setIsManualBookingOpen(true);
@@ -281,6 +282,19 @@ export default function BarberDashboard({ selectedAppointmentId, onAppointmentDi
       }
     }
   }, [selectedAppointmentId, appointments, onAppointmentDialogClose]);
+
+  // Ascolta le notifiche speciali di rifiuto
+  useEffect(() => {
+    const handleSpecialNotif = (e: any) => {
+      const notif = e.detail;
+      if (notif && notif.type === 'proposal_declined') {
+        setDeclinedProposalNotif(notif);
+      }
+    };
+    
+    window.addEventListener('special-notification-click', handleSpecialNotif);
+    return () => window.removeEventListener('special-notification-click', handleSpecialNotif);
+  }, []);
 
   const handleCancel = async (app: Appointment) => {
     const path = `appointments/${app.id}`;
@@ -869,6 +883,47 @@ export default function BarberDashboard({ selectedAppointmentId, onAppointmentDi
           </div>
         </div>
       )}
+
+{/* Popup Proposta Rifiutata - Design Pulito e Diretto */}
+      {declinedProposalNotif && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[150] p-4 animate-in fade-in duration-200">
+          <div className="bg-white w-full max-w-sm rounded-[32px] p-8 shadow-2xl border border-white/20 text-center animate-in zoom-in-95">
+            <div className="w-16 h-16 bg-red-50 text-red-600 rounded-2xl flex items-center justify-center mx-auto mb-6">
+              <XCircle size={32} />
+            </div>
+            
+            <h3 className="text-2xl font-bold mb-2">Proposta Rifiutata</h3>
+            <p className="text-gray-500 mb-6 text-sm leading-relaxed">
+              Il cliente <span className="font-bold text-black">{declinedProposalNotif.declinedDetails?.customerName}</span> ha preferito ignorare lo scambio.
+            </p>
+            
+            <div className="bg-gray-50 rounded-2xl p-4 mb-8 text-left space-y-3 border border-gray-100">
+              <div className="flex justify-between items-center opacity-40">
+                <span className="text-[10px] font-bold text-gray-600 uppercase tracking-widest">Cambio Proposto</span>
+                <span className="font-bold line-through">
+                  {declinedProposalNotif.declinedDetails?.proposedTime ? format(declinedProposalNotif.declinedDetails.proposedTime.toDate(), 'dd/MM/yyyy - HH:mm') : '--:--'}
+                </span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest flex items-center gap-1">
+                  <CheckCircle2 size={12} /> Orario Mantenuto
+                </span>
+                <span className="font-bold text-emerald-600">
+                  {declinedProposalNotif.declinedDetails?.originalTime ? format(declinedProposalNotif.declinedDetails.originalTime.toDate(), 'dd/MM/yyyy - HH:mm') : '--:--'}
+                </span>
+              </div>
+            </div>
+
+            <button
+              onClick={() => setDeclinedProposalNotif(null)}
+              className="w-full py-4 bg-gray-100 text-gray-600 rounded-2xl font-bold hover:bg-gray-200 hover:text-black transition-all"
+            >
+              Chiudi
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Manual Booking Modal */}
       {isManualBookingOpen && (
         <ManualBookingModal 

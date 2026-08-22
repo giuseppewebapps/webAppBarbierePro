@@ -733,20 +733,25 @@ const handleCancel = async (app: Appointment) => {
           });
         }
 
-      const barberSnapshot = await getDocs(query(collection(db, 'users'), where('role', '==', 'barber')));
-      
-     // Crea una notifica separata per OGNI barbiere trovato
-      for (const barberDoc of barberSnapshot.docs) {
-        await addDoc(collection(db, 'notifications'), {
-          userId: barberDoc.id,
-          title: 'Proposta Rifiutata',
-          message: `Il cliente ${profile?.displayName} ha rifiutato la tua proposta per il ${format(proposal.gapStartTime.toDate(), 'd MMM HH:mm')}`,
-          type: 'booking',
-          read: false,
-          createdAt: Timestamp.now(),
-          appointmentId: currentTarget.appointmentId
-        });
-      }
+     const appDoc = await getDoc(doc(db, 'appointments', currentTarget.appointmentId));
+        const myApp = appDoc.exists() ? (appDoc.data() as Appointment) : null;
+
+        const barberSnapshot = await getDocs(query(collection(db, 'users'), where('role', '==', 'barber')));
+        for (const barberDoc of barberSnapshot.docs) {
+          await addDoc(collection(db, 'notifications'), {
+            userId: barberDoc.id,
+            title: 'Proposta Rifiutata',
+            message: `Il cliente ${profile?.displayName || 'Cliente'} ha preferito mantenere il suo orario.`,
+            type: 'proposal_declined',
+            read: false,
+            createdAt: Timestamp.now(),
+            declinedDetails: {
+              customerName: profile?.displayName || 'Cliente',
+              originalTime: myApp?.startTime || proposal.gapStartTime,
+              proposedTime: proposal.gapStartTime
+            }
+          });
+        }
       }
 
       // Pulizia notifiche destinate ESCLUSIVAMENTE all'utente corrente
