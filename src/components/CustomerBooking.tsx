@@ -830,11 +830,8 @@ const handleCancel = async (app: Appointment) => {
               }
             });
           }
-        } catch (err) {
-          console.warn("Impossibile inviare notifica di rifiuto al barbiere:", err);
-        }
 
-        // -- NUOVO: EMAIL PROPOSTA RIFIUTATA --
+          // EMAIL PROPOSTA RIFIUTATA --
           notifySystemByEmail({
             type: 'proposal_declined',
             customerName: profile?.displayName || 'Cliente',
@@ -845,6 +842,10 @@ const handleCancel = async (app: Appointment) => {
               proposedTime: format(freshProposal.gapStartTime.toDate(), 'HH:mm')
             }
           });
+
+        } catch (err) {
+          console.warn("Impossibile inviare notifica di rifiuto al barbiere:", err);
+        }
       }
 
       // Pulizia notifiche destinate ESCLUSIVAMENTE all'utente corrente
