@@ -633,7 +633,12 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
                   ) : (
                     apps.map(app => {
                       const duration = (app.endTime.toDate().getTime() - app.startTime.toDate().getTime()) / (1000 * 60);
-                      const cardWidth = (duration / 30) * 14; 
+                      
+                      // Calcoliamo una larghezza intelligente (Responsive)
+                      const isMobile = typeof window !== 'undefined' && window.innerWidth < 640;
+                      // Usiamo 7 su smartphone e 10 su PC.
+                      const baseWidth = isMobile ? 7 : 10; 
+                      const cardWidth = (duration / 30) * baseWidth; 
                       
                       const isCandidate = rescheduleCandidates.some(c => c.id === app.id);
                       const isSelected = selectedCandidates.includes(app.id!);
@@ -650,9 +655,11 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
                               setSelectedAppointment(app);
                             }
                           }}
-                          style={{ width: `${cardWidth}rem` }}
+                          // Aggiungiamo maxWidth per sicurezza su schermi piccolissimi
+                          style={{ width: `${cardWidth}rem`, maxWidth: '85vw' }}
                           className={cn(
-                            "flex-shrink-0 p-2.5 rounded-xl shadow-md flex flex-col justify-between text-left transition-all cursor-pointer relative h-[88px] duration-500",
+                            // p-2 su mobile, min-h ridotto per compattezza
+                            "flex-shrink-0 p-2 sm:p-2.5 rounded-xl shadow-md flex flex-col justify-between text-left transition-all cursor-pointer relative min-h-[76px] sm:h-[88px] duration-500",
                             app.id === highlightedAppId ? (app.status === 'cancelled' ? "ring-4 ring-red-500 shadow-[0_0_30px_rgba(239,68,68,0.7)] scale-[1.05] z-20 grayscale-0 opacity-100" : "ring-4 ring-emerald-500 shadow-[0_0_30px_rgba(16,185,129,0.6)] scale-[1.05] z-20") : "hover:scale-[1.02]",
                             selectionMode && !isCandidate ? "bg-gray-100 text-gray-400 grayscale shadow-none border-gray-200" :
                             isSelected ? "bg-emerald-500 text-white ring-4 ring-emerald-500/30" :
@@ -662,16 +669,18 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
                           )}
                         >
                           <div>
-                            <div className="flex justify-between items-start">
-                              <div className="font-bold text-xs truncate">
+                            {/* Aggiunto gap-2, shrink-0 per gli orari e truncate al nome */}
+                            <div className="flex justify-between items-start gap-2">
+                              <div className="font-bold text-[11px] sm:text-xs truncate">
                                 {app.status === 'cancelled' ? 'ANNULLATO' : (app.isForFriend ? `Per: ${app.friendDetails?.firstName}` : app.customer?.displayName)}
                               </div>
-                              <div className="text-[9px] font-bold opacity-60 flex flex-col items-end leading-tight">
+                              <div className="text-[9px] font-bold opacity-60 flex flex-col items-end leading-tight shrink-0">
                                 <span>{format(app.startTime.toDate(), 'HH:mm')}</span>
                                 <span>- {format(app.endTime?.toDate() || addMinutes(app.startTime.toDate(), app.services.reduce((acc, s) => acc + s.duration, 0)), 'HH:mm')}</span>
                               </div>
                             </div>
-                            <div className="text-[9px] opacity-70 mt-0.5 flex flex-wrap gap-1">
+                            {/* Troncato anche l'elenco servizi se è troppo lungo */}
+                            <div className="text-[9px] opacity-70 mt-0.5 truncate">
                               {app.services.map(s => s.name).join(', ')}
                             </div>
                           </div>
