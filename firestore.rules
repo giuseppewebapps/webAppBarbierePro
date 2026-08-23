@@ -113,6 +113,15 @@ service cloud.firestore {
       );
     }
 
+    match /rescheduleProposals/{proposalId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    match /contacts/{contactId} {
+      allow read: if isAdmin();
+      allow write: if isAdmin() && isValidContact(request.resource.data);
+    }
+
     // REGOLE PER LA SCATOLA NERA (ERROR LOGS)
     match /system_logs/{logId} {
       // 1. Qualsiasi utente loggato può CREARE un log di errore
@@ -121,15 +130,6 @@ service cloud.firestore {
       // 2. Solo i barbieri possono LEGGERE o CANCELLARE i log
       allow read, update, delete: if request.auth != null && 
         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'barber';
-    }
-
-    match /rescheduleProposals/{proposalId} {
-      allow read, write: if isAuthenticated();
-    }
-
-    match /contacts/{contactId} {
-      allow read: if isAdmin();
-      allow write: if isAdmin() && isValidContact(request.resource.data);
     }
 
     // ===============================================================
