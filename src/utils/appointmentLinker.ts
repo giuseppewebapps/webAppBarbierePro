@@ -1,5 +1,5 @@
-import { collection, query, where, getDocs, updateDoc, doc } from 'firebase/firestore';
-import { db } from '../firebase'; // Assicurati che il percorso sia corretto
+import { collection, query, where, getDocs, updateDoc, doc, addDoc, Timestamp } from 'firebase/firestore';
+import { db } from '../firebase'; 
 
 export async function autoLinkAppointments(userProfile: { uid: string; displayName: string; phoneNumber?: string }) {
   if (!userProfile?.displayName || !userProfile?.phoneNumber) return;
@@ -18,21 +18,15 @@ export async function autoLinkAppointments(userProfile: { uid: string; displayNa
     const updates = snapshot.docs.map(async (document) => {
       const app = document.data();
       
-      // Normalizziamo i nomi per il confronto (tutto minuscolo, senza spazi extra)
       const appName = (app.customer?.displayName || '').toLowerCase().trim();
       const registeredName = userProfile.displayName.toLowerCase().trim();
 
-      // LOGICA DI MATCHING: 
-      // Se il nome è identico (es. "Aldo Lops" == "aldo lops") 
-      // OPPURE se il nome registrato contiene quello segnato dal barbiere (es. "Gialluisi" è contenuto in "Marco Gialluisi")
       if (appName === registeredName || registeredName.includes(appName) || appName.includes(registeredName)) {
-        
-        // BOOM! Colleghiamo l'appuntamento al vero utente!
         await updateDoc(doc(db, 'appointments', document.id), {
           customerId: userProfile.uid,
-          'customer.phoneNumber': userProfile.phoneNumber, // Inietta il vero numero per WhatsApp!
-          'customer.displayName': userProfile.displayName, // Sostituisce eventuali soprannomi con il nome reale
-          isManual: false // Lo trasforma in un appuntamento digitale al 100%
+          'customer.phoneNumber': userProfile.phoneNumber, 
+          'customer.displayName': userProfile.displayName, 
+          isManual: false 
         });
         
         console.log(`✅ Appuntamento orfano ricollegato con successo a ${userProfile.displayName}!`);
@@ -40,7 +34,24 @@ export async function autoLinkAppointments(userProfile: { uid: string; displayNa
     });
 
     await Promise.all(updates);
-  } catch (error) {
+    
+  } catch (error: any) {
+    // IL CLIENTE NON VEDE NULLA, MA NOI REGISTRIAMO TUTTO
     console.error("Errore durante la riconciliazione degli appuntamenti:", error);
+    
+    // -- NUOVO: SCATOLA NERA (ERROR LOGGING) --
+    try {
+      await addDoc(collection(db, 'system_logs'), {
+        type: 'auto_link_error',
+        userId: userProfile.uid,
+        userName: userProfile.displayName,
+        errorMessage: error.message || String(error),
+        timestamp: Timestamp.now(),
+        resolved: false
+      });
+    } catch (logError) {
+      // Se fallisce anche il salvataggio del log, non possiamo fare altro dal client
+      console.warn("Impossibile salvare il log di errore in Firestore", logError);
+    }
   }
 }
