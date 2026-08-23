@@ -113,6 +113,16 @@ service cloud.firestore {
       );
     }
 
+    // REGOLE PER LA SCATOLA NERA (ERROR LOGS)
+    match /system_logs/{logId} {
+      // 1. Qualsiasi utente loggato può CREARE un log di errore
+      allow create: if request.auth != null;
+      
+      // 2. Solo i barbieri possono LEGGERE o CANCELLARE i log
+      allow read, update, delete: if request.auth != null && 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'barber';
+    }
+
     match /rescheduleProposals/{proposalId} {
       allow read, write: if isAuthenticated();
     }
