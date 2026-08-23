@@ -28,6 +28,7 @@ import BarberDashboard from './components/BarberDashboard';
 import CustomerBooking from './components/CustomerBooking';
 import { LogOut, Scissors, Plus, Clock as ClockIcon } from 'lucide-react';
 import NotificationBell from './components/NotificationBell';
+import { autoLinkAppointments } from './utils/appointmentLinker';
 
 interface AuthContextType {
   user: FirebaseUser | null;
@@ -115,16 +116,27 @@ export default function App() {
       setUser(firebaseUser);
       if (firebaseUser) {
         const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
+        
+        let currentProfile: UserProfile;
+
         if (!userDoc.exists()) {
           // Creazione profilo di base
           const role: UserRole = BARBER_EMAILS.includes(firebaseUser.email || '') ? 'barber' : 'customer';
-          const newProfile: UserProfile = {
+          currentProfile = {
             uid: firebaseUser.uid,
             email: firebaseUser.email || '',
             displayName: firebaseUser.displayName || 'Utente',
             role: role,
+            phoneNumber: firebaseUser.phoneNumber || undefined // Utile se usi login con telefono in futuro
           };
-          await setDoc(doc(db, 'users', firebaseUser.uid), newProfile);
+          await setDoc(doc(db, 'users', firebaseUser.uid), currentProfile);
+        } else {
+          currentProfile = userDoc.data() as UserProfile;
+        }
+
+        // Lanciamo il gancio di riconciliazione in background
+        if (currentProfile.role === 'customer') {
+          autoLinkAppointments(currentProfile).catch(console.error);
         }
       }
       setLoading(false);

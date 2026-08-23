@@ -7,3 +7,7 @@ coverage/
 .env*
 !.env.example
 .vscode/launch.json
+agenda.ics
+migrate.cjs
+rollback.cjs
+serviceAccountKey.json
