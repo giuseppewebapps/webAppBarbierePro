@@ -17,6 +17,7 @@ import { db, auth } from '../firebase';
 import { useAuth } from '../App';
 import { SERVICES, OPENING_HOURS, CLOSED_DAYS, COUNTRY_CODES, BARBER_EMAILS, SALON_INFO } from '../constants';
 import { Appointment, Service, RescheduleProposal, SpecialDay } from '../types';
+import { notifySystemByEmail } from '../utils/emailNotifier';
 import { 
   format, 
   addMinutes, 
@@ -577,6 +578,15 @@ const handleBooking = async (shouldUpdateProfilePhone: boolean = false) => {
         console.warn("Could not notify barber:", err);
       }
       
+// -- INVIA EMAIL AL BARBIERE --
+      notifySystemByEmail({
+        type: 'new_booking',
+        customerName: isForFriend ? `${friendFirstName} ${friendLastName}` : (profile?.displayName || 'Cliente'),
+        date: format(selectedSlot, 'dd/MM/yyyy'),
+        time: format(selectedSlot, 'HH:mm'),
+        services: selectedServices.map(s => s.name).join(', ')
+      });
+
       if (shouldUpdateProfilePhone && newPhoneNumberToUpdate) {
         try {
           await updateDoc(doc(db, 'users', profile.uid), { phoneNumber: newPhoneNumberToUpdate });
@@ -650,6 +660,16 @@ const handleCancel = async (app: Appointment) => {
           appointmentId: app.id
         });
       }
+
+      // -- INVIA EMAIL AL BARBIERE --
+      notifySystemByEmail({
+        type: 'cancellation',
+        customerName: profile?.displayName || 'Cliente',
+        date: format(appStart, 'dd/MM/yyyy'),
+        time: format(appStart, 'HH:mm'),
+        services: app.services.map(s => s.name).join(', ')
+      });
+      // -----------------------------------
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `appointments/${app.id}`);
     }
@@ -719,6 +739,18 @@ const handleCancel = async (app: Appointment) => {
             appointmentId: currentTarget.appointmentId 
           });
         }
+
+        // -- EMAIL PROPOSTA ACCETTATA --
+        notifySystemByEmail({
+          type: 'proposal_accepted',
+          customerName: profile?.displayName || 'Cliente',
+          date: format(newStartTime, 'dd/MM/yyyy'),
+          time: format(newStartTime, 'HH:mm'),
+          proposalDetails: {
+            oldDate: format(myApp.startTime.toDate(), 'dd/MM/yyyy'),
+            oldTime: format(myApp.startTime.toDate(), 'HH:mm')
+          }
+        });
 
         // 4. SOFT DELETE: Aggiorna lo stato della proposta a 'completed' (evita il crash di permessi)
         await updateDoc(proposalRef, { 
@@ -801,6 +833,18 @@ const handleCancel = async (app: Appointment) => {
         } catch (err) {
           console.warn("Impossibile inviare notifica di rifiuto al barbiere:", err);
         }
+
+        // -- NUOVO: EMAIL PROPOSTA RIFIUTATA --
+          notifySystemByEmail({
+            type: 'proposal_declined',
+            customerName: profile?.displayName || 'Cliente',
+            date: format(myApp?.startTime?.toDate() || freshProposal.gapStartTime.toDate(), 'dd/MM/yyyy'),
+            time: format(myApp?.startTime?.toDate() || freshProposal.gapStartTime.toDate(), 'HH:mm'),
+            proposalDetails: {
+              oldTime: format(myApp?.startTime?.toDate() || freshProposal.gapStartTime.toDate(), 'HH:mm'),
+              proposedTime: format(freshProposal.gapStartTime.toDate(), 'HH:mm')
+            }
+          });
       }
 
       // Pulizia notifiche destinate ESCLUSIVAMENTE all'utente corrente

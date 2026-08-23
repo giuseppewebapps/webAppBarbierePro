@@ -44,6 +44,9 @@ export const BARBER_EMAILS = [
   'malderadomenico98@gmail.com',
 ];
 
+// Indirizzo mail dove far arrivare le notifiche
+export const SYSTEM_NOTIFICATION_EMAIL = 'notifiche.medohs@gmail.com';
+
 export const SALON_INFO = {
   phone: "+39 327 141 3594",
   whatsapp: "393271413594",
