@@ -28,7 +28,8 @@ import BarberDashboard from './components/BarberDashboard';
 import CustomerBooking from './components/CustomerBooking';
 import { LogOut, Scissors, Plus, Clock as ClockIcon } from 'lucide-react';
 import NotificationBell from './components/NotificationBell';
-import { autoLinkAppointments } from './utils/appointmentLinker';
+import { autoLinkAppointmentsByPhone } from './utils/appointmentLinker';
+import { logSystemError } from './utils/logger';
 
 interface AuthContextType {
   user: FirebaseUser | null;
@@ -56,7 +57,8 @@ export default function App() {
   const [selectedNotificationType, setSelectedNotificationType] = useState<string | null>(null);
 
   // Stati per gestire l'accesso con Email e Password
-  const [name, setName] = useState(''); // <--- Nuovo stato per il Nome
+  const [name, setName] = useState('');
+  const [phoneNumber, setPhoneNumber] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isLoginMode, setIsLoginMode] = useState(true);
@@ -127,16 +129,25 @@ export default function App() {
             email: firebaseUser.email || '',
             displayName: firebaseUser.displayName || 'Utente',
             role: role,
-            phoneNumber: firebaseUser.phoneNumber || undefined // Utile se usi login con telefono in futuro
+            // 🚀 FIX: Sostituito 'undefined' con stringa vuota per non far crashare Firestore
+            phoneNumber: firebaseUser.phoneNumber || '' 
           };
           await setDoc(doc(db, 'users', firebaseUser.uid), currentProfile);
         } else {
           currentProfile = userDoc.data() as UserProfile;
         }
 
-        // Lanciamo il gancio di riconciliazione in background
+        // Lanciamo la NUOVA riconciliazione basata sul TELEFONO
         if (currentProfile.role === 'customer') {
-          autoLinkAppointments(currentProfile).catch(console.error);
+          autoLinkAppointmentsByPhone(currentProfile).catch(async (err) => {
+            console.error("Errore durante l'autoLink:", err);
+            await logSystemError({
+              type: 'login_autolink_failure',
+              userId: currentProfile.uid,
+              userName: currentProfile.displayName,
+              error: err
+            });
+          });
         }
       }
       setLoading(false);
@@ -165,12 +176,17 @@ export default function App() {
         // Registrazione
         const userCredential = await createUserWithEmailAndPassword(auth, email, password);
         
-        // Se l'utente ha inserito un nome, aggiorniamo profilo e Firestore
         if (name.trim() !== '') {
           await updateProfile(userCredential.user, { displayName: name });
-          await setDoc(doc(db, 'users', userCredential.user.uid), { displayName: name }, { merge: true });
-          setProfile(prev => prev ? { ...prev, displayName: name } : null);
         }
+        
+        // Salvataggio sicuro su Firestore (niente undefined!)
+        await setDoc(doc(db, 'users', userCredential.user.uid), { 
+          displayName: name.trim() !== '' ? name : 'Nuovo Cliente',
+          phoneNumber: phoneNumber.trim() !== '' ? phoneNumber : ''
+        }, { merge: true });
+        
+        setProfile(prev => prev ? { ...prev, displayName: name, phoneNumber: phoneNumber } : null);
       }
     } catch (error: unknown) {
       console.error('Auth error:', error);
@@ -233,14 +249,32 @@ export default function App() {
 
               <form onSubmit={handleEmailAuth} className="flex flex-col gap-4 mb-6">
                 {!isLoginMode && (
-                  <input
-                    type="text"
-                    placeholder="Il tuo nome (es. Marco)"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    className="w-full p-4 rounded-2xl border border-gray-200 focus:outline-none focus:border-black transition-colors"
-                    required
-                  />
+                  <>
+                    <input
+                      type="text"
+                      placeholder="Il tuo nome (es. Marco)"
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      className="w-full p-4 rounded-2xl border border-gray-200 focus:outline-none focus:border-black transition-colors"
+                      required
+                    />
+                    <input
+                      type="tel"
+                      placeholder="Numero di cellulare (es. 3331234567)"
+                      value={phoneNumber}
+                      onChange={(e) => {
+                        // Rimuove istantaneamente qualsiasi carattere che non sia un numero (0-9)
+                        const onlyNums = e.target.value.replace(/[^0-9]/g, '');
+                        // Limita la lunghezza massima a 10 caratteri
+                        setPhoneNumber(onlyNums.slice(0, 10));
+                      }}
+                      maxLength={10}
+                      pattern="[0-9]{9,10}"
+                      title="Inserisci un numero di cellulare valido (9 o 10 cifre)"
+                      className="w-full p-4 rounded-2xl border border-gray-200 focus:outline-none focus:border-black transition-colors"
+                      required
+                    />
+                  </>
                 )}
                 <input
                   type="email"

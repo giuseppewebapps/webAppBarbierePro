@@ -1,11 +1,17 @@
-import { collection, query, where, getDocs, updateDoc, doc, addDoc, Timestamp } from 'firebase/firestore';
+import { collection, query, where, getDocs, updateDoc, doc } from 'firebase/firestore';
 import { db } from '../firebase'; 
+import { logSystemError } from './logger';
 
-export async function autoLinkAppointments(userProfile: { uid: string; displayName: string; phoneNumber?: string }) {
-  if (!userProfile?.displayName || !userProfile?.phoneNumber) return;
+export async function autoLinkAppointmentsByPhone(userProfile: { uid: string; displayName: string; phoneNumber?: string }) {
+  // Se l'utente non ha un numero di telefono, è impossibile fare un'associazione sicura
+  if (!userProfile?.phoneNumber) return;
+
+  // Puliamo il numero da spazi o prefissi per fare un match perfetto (ultime 10 cifre)
+  const cleanUserPhone = userProfile.phoneNumber.replace(/\D/g, '').slice(-10);
+
+  if (cleanUserPhone.length < 9) return; // Sicurezza: numero troppo corto
 
   try {
-    // 1. Cerca tutti gli appuntamenti manuali o importati
     const q = query(
       collection(db, 'appointments'),
       where('customerId', '==', 'manual_entry'),
@@ -14,44 +20,36 @@ export async function autoLinkAppointments(userProfile: { uid: string; displayNa
 
     const snapshot = await getDocs(q);
 
-    // 2. Controlla e aggiorna
     const updates = snapshot.docs.map(async (document) => {
       const app = document.data();
       
-      const appName = (app.customer?.displayName || '').toLowerCase().trim();
-      const registeredName = userProfile.displayName.toLowerCase().trim();
-
-      if (appName === registeredName || registeredName.includes(appName) || appName.includes(registeredName)) {
-        await updateDoc(doc(db, 'appointments', document.id), {
-          customerId: userProfile.uid,
-          'customer.phoneNumber': userProfile.phoneNumber, 
-          'customer.displayName': userProfile.displayName, 
-          isManual: false 
-        });
+      // Controlla se l'appuntamento importato ha un numero di telefono
+      if (app.customer?.phoneNumber) {
+        const cleanAppPhone = app.customer.phoneNumber.replace(/\D/g, '').slice(-10);
         
-        console.log(`✅ Appuntamento orfano ricollegato con successo a ${userProfile.displayName}!`);
+        // MATCH PERFETTO SUL TELEFONO
+        if (cleanAppPhone === cleanUserPhone) {
+          await updateDoc(doc(db, 'appointments', document.id), {
+            customerId: userProfile.uid,
+            'customer.phoneNumber': userProfile.phoneNumber, 
+            'customer.displayName': userProfile.displayName, 
+            isManual: false 
+          });
+          
+          console.log(`✅ Appuntamento ricollegato via telefono a ${userProfile.displayName}!`);
+        }
       }
     });
 
     await Promise.all(updates);
     
   } catch (error: any) {
-    // IL CLIENTE NON VEDE NULLA, MA NOI REGISTRIAMO TUTTO
-    console.error("Errore durante la riconciliazione degli appuntamenti:", error);
-    
-    // -- NUOVO: SCATOLA NERA (ERROR LOGGING) --
-    try {
-      await addDoc(collection(db, 'system_logs'), {
-        type: 'auto_link_error',
-        userId: userProfile.uid,
-        userName: userProfile.displayName,
-        errorMessage: error.message || String(error),
-        timestamp: Timestamp.now(),
-        resolved: false
-      });
-    } catch (logError) {
-      // Se fallisce anche il salvataggio del log, non possiamo fare altro dal client
-      console.warn("Impossibile salvare il log di errore in Firestore", logError);
-    }
+    console.error("Errore riconciliazione appuntamenti:", error);
+    await logSystemError({
+      type: 'auto_link_phone_error',
+      userId: userProfile.uid,
+      userName: userProfile.displayName,
+      error
+    });
   }
 }

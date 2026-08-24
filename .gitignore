@@ -11,3 +11,4 @@ agenda.ics
 migrate.cjs
 rollback.cjs
 serviceAccountKey.json
+cleanupUsers.cjs
