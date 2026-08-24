@@ -61,7 +61,14 @@ import {
 import { useAuth } from '../App';
 import { WhatsAppButton } from './WhatsAppButton';
 import { generateWhatsAppLink } from '../utils/whatsapp';
-import { SERVICES, OPENING_HOURS, CLOSED_DAYS, COUNTRY_CODES } from '../constants';
+import { 
+  SERVICES, 
+  DEFAULT_OPENING_HOURS, 
+  DEFAULT_CLOSED_DAYS, 
+  COUNTRY_CODES, 
+  BARBER_EMAILS, 
+  SALON_INFO 
+} from '../constants';
 import { cn } from '../lib/utils';
 import { RescheduleProposal } from '../types';
 import ScheduleMaintenanceModal from './ScheduleMaintenanceModal';
@@ -1367,7 +1374,7 @@ const next30Days = React.useMemo(() => {
     const dateString = format(d, 'yyyy-MM-dd');
     const exception = specialDays.find(ex => ex.date === dateString);
     if (exception) return !exception.isClosed;
-    return !CLOSED_DAYS.includes(getDay(d));
+    return !DEFAULT_CLOSED_DAYS.includes(getDay(d));
   });
 }, [specialDays]);
 
@@ -1391,14 +1398,14 @@ const next30Days = React.useMemo(() => {
     const exceptionForToday = specialDays.find(ex => ex.date === dateString);
 
     // 3. Controllo blocco se è chiuso (per ferie speciali o perché è un giorno di chiusura standard)
-    if (exceptionForToday?.isClosed || (!exceptionForToday && CLOSED_DAYS.includes(getDay(selectedDate)))) {
+    if (exceptionForToday?.isClosed || (!exceptionForToday && DEFAULT_CLOSED_DAYS.includes(getDay(selectedDate)))) {
       setAvailableSlots([]);
       setLoading(false);
       return;
     }
 
     // 4. Definiamo quali orari usare (quelli speciali se ci sono, altrimenti gli standard)
-    const activeOpeningHours = exceptionForToday?.openingHours || OPENING_HOURS;
+    const activeOpeningHours = exceptionForToday?.openingHours || DEFAULT_OPENING_HOURS;
 
     try {
       const q = query(

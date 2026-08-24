@@ -4,7 +4,8 @@ import { db } from '../firebase';
 import { format } from 'date-fns';
 import { it } from 'date-fns/locale';
 import { DayPicker } from 'react-day-picker';
-import { XCircle, Calendar as CalendarIcon, Save, Trash2, Clock } from 'lucide-react';
+import ScheduleSettingsModal from './ScheduleSettingsModal';
+import { XCircle, Settings, Calendar as CalendarIcon, Save, Trash2, Clock } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { SpecialDay } from '../types';
 
@@ -17,6 +18,9 @@ export default function ScheduleMaintenanceModal({ onClose }: Props) {
   const [isClosed, setIsClosed] = useState(false);
   const [loading, setLoading] = useState(false);
   
+  // Stato per la modale sottomessa degli orari di apertura standard
+  const [isScheduleSettingsOpen, setIsScheduleSettingsOpen] = useState(false);
+  
   // Orari di default (es. mattina e pomeriggio)
   const [shift1Start, setShift1Start] = useState<number>(8);
   const [shift1End, setShift1End] = useState<number>(13);
@@ -24,7 +28,7 @@ export default function ScheduleMaintenanceModal({ onClose }: Props) {
   const [shift2Start, setShift2Start] = useState<number>(14);
   const [shift2End, setShift2End] = useState<number>(20);
 
-// Genera le opzioni per la tendina (scatti di 15 minuti)
+  // Genera le opzioni per la tendina (scatti di 15 minuti)
   const timeOptions = React.useMemo(() => {
     const options = [];
     for (let h = 0; h < 24; h++) {
@@ -88,7 +92,7 @@ export default function ScheduleMaintenanceModal({ onClose }: Props) {
     };
 
     try {
-      // Usiamo setDoc con dateString come ID per evitare duplicati!
+      // setDoc con dateString come ID per sovrascrivere o creare senza duplicati
       await setDoc(doc(db, 'calendar_exceptions', dateString), specialDayData);
       alert('Orario aggiornato con successo!');
       onClose();
@@ -116,7 +120,7 @@ export default function ScheduleMaintenanceModal({ onClose }: Props) {
   };
 
   return (
-    <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in">
+    <div className="fixed inset-0 z-[150] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in">
       <div className="bg-white rounded-[32px] w-full max-w-lg max-h-[90vh] overflow-y-auto shadow-2xl">
         <div className="p-6 border-b border-gray-100 flex justify-between items-center sticky top-0 bg-white z-10">
           <div className="flex items-center gap-3">
@@ -128,9 +132,22 @@ export default function ScheduleMaintenanceModal({ onClose }: Props) {
               <p className="text-xs text-gray-500">Gestisci ferie ed eccezioni</p>
             </div>
           </div>
-          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full">
-            <XCircle size={24} className="text-gray-400" />
-          </button>
+
+          <div className="flex items-center gap-2">
+            {/* Pulsante per accedere alla modale degli Orari Standard */}
+            <button
+              onClick={() => setIsScheduleSettingsOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-2 bg-black text-white text-xs font-bold rounded-xl hover:bg-gray-800 transition-all shadow-sm"
+              title="Configura orari di apertura e chiusura standard"
+            >
+              <Settings size={14} />
+              <span>Orari Standard</span>
+            </button>
+
+            <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full">
+              <XCircle size={24} className="text-gray-400" />
+            </button>
+          </div>
         </div>
 
         <div className="p-6 space-y-8">
@@ -221,6 +238,11 @@ export default function ScheduleMaintenanceModal({ onClose }: Props) {
             <Save size={20} /> {loading ? 'Salvataggio...' : 'Salva Regola'}
           </button>
         </div>
+
+        {/* Modale sovrapposta per la configurazione degli orari e dei giorni di chiusura standard */}
+        {isScheduleSettingsOpen && (
+          <ScheduleSettingsModal onClose={() => setIsScheduleSettingsOpen(false)} />
+        )}
       </div>
     </div>
   );

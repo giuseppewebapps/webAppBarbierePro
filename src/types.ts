@@ -78,6 +78,17 @@ export interface CountryCode {
   dial_code: string;
 }
 
+export interface TimeRange {
+  start: number; // es. 8.75 per le 08:45
+  end: number;   // es. 13.75 per le 13:45
+}
+
+export interface BusinessSettings {
+  openingHours: TimeRange[];
+  closedDays: number[]; // 0 = Domenica, 1 = Lunedì, ecc.
+  updatedAt?: any;
+}
+
 export interface SpecialDay {
   id?: string;
   date: string; // Formato 'YYYY-MM-DD' (es. '2024-08-14') per facilitare la ricerca

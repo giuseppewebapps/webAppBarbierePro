@@ -10,13 +10,10 @@ import {
   onSnapshot,
   doc,
   updateDoc,
-  deleteDoc,
-  limit
+  deleteDoc
 } from 'firebase/firestore';
 import { db, auth } from '../firebase';
 import { useAuth } from '../App';
-import { SERVICES, OPENING_HOURS, CLOSED_DAYS, COUNTRY_CODES, BARBER_EMAILS, SALON_INFO } from '../constants';
-import { Appointment, Service, RescheduleProposal, SpecialDay } from '../types';
 import { notifySystemByEmail } from '../utils/emailNotifier';
 import { 
   format, 
@@ -36,7 +33,7 @@ import {
 } from 'date-fns';
 import { it } from 'date-fns/locale';
 import { DayPicker } from 'react-day-picker';
-import 'react-day-picker/style.css'; // MODIFICATO: percorso corretto per react-day-picker v9
+import 'react-day-picker/style.css';
 import { 
   Calendar as CalendarIcon, 
   Clock, 
@@ -54,6 +51,15 @@ import {
   MessageCircle
 } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { 
+  SERVICES, 
+  DEFAULT_OPENING_HOURS, 
+  DEFAULT_CLOSED_DAYS, 
+  COUNTRY_CODES, 
+  BARBER_EMAILS, 
+  SALON_INFO 
+} from '../constants';
+import { Appointment, Service, RescheduleProposal, SpecialDay, TimeRange } from '../types';
 
 enum OperationType {
   CREATE = 'create',
@@ -73,7 +79,7 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
       userId: auth.currentUser?.uid,
       email: auth.currentUser?.email
     }
-  }
+  };
   console.error('Firestore Error: ', JSON.stringify(errInfo));
   throw new Error(JSON.stringify(errInfo));
 }
@@ -89,7 +95,7 @@ interface CustomerBookingProps {
 const AppointmentTicket: React.FC<{ 
   app: Appointment, 
   onCancel?: (app: Appointment) => void,
-  isHighlighted?: boolean // <--- NUOVA PROP
+  isHighlighted?: boolean
 }> = ({ app, onCancel, isHighlighted }) => {
   const now = new Date();
   const isPast = isBefore(app.startTime.toDate(), now);
@@ -101,22 +107,14 @@ const AppointmentTicket: React.FC<{
   
   const canCancel = app.status === 'booked' && !isPast && (isMoreThan6Hours || isGracePeriod);
   
-return (
+  return (
     <div 
       id={`appointment-${app.id}`}
       className={cn(
         "relative rounded-3xl p-6 transition-all duration-500 overflow-hidden",
-        
-        // 1. STATO NORMALE: Non evidenziato e Annullato (Grigio e sbiadito)
         !isHighlighted && isCancelled && "bg-white opacity-60 grayscale border border-gray-100 shadow-md",
-        
-        // 2. STATO NORMALE: Non evidenziato e Valido (Bianco normale)
         !isHighlighted && !isCancelled && "bg-white border border-gray-100 hover:shadow-lg shadow-md",
-        
-        // 3. EVIDENZIATO E ANNULLATO: Torna opaco al 100%, toglie il grigio ed emette un bagliore ROSSO
         isHighlighted && isCancelled && "bg-red-50/95 border-2 border-red-500 shadow-[0_0_40px_rgba(239,68,68,0.4)] ring-4 ring-red-500/30 scale-[1.02] z-20 opacity-100 grayscale-0",
-        
-        // 4. EVIDENZIATO E VALIDO: Emette un bagliore VERDE
         isHighlighted && !isCancelled && "bg-emerald-50/95 border-2 border-emerald-500 shadow-[0_0_40px_rgba(16,185,129,0.4)] ring-4 ring-emerald-500/30 scale-[1.02] z-20"
       )}
     >
@@ -179,6 +177,29 @@ export default function CustomerBooking({
 }: CustomerBookingProps) {
   const { profile } = useAuth();
 
+  // 🚀 STATO DINAMICO IMPOSTAZIONI ORARI (Inizializzato con i Fallback)
+  const [businessSettings, setBusinessSettings] = useState<{
+    openingHours: TimeRange[];
+    closedDays: number[];
+  }>({
+    openingHours: DEFAULT_OPENING_HOURS,
+    closedDays: DEFAULT_CLOSED_DAYS
+  });
+
+  // 🚀 ASCOLTO IN TEMPO REALE DI FIRESTORE
+  useEffect(() => {
+    const unsubscribe = onSnapshot(doc(db, 'settings', 'business_hours'), (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        setBusinessSettings({
+          openingHours: data.openingHours || DEFAULT_OPENING_HOURS,
+          closedDays: data.closedDays || DEFAULT_CLOSED_DAYS
+        });
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
   const [selectedServices, setSelectedServices] = useState<Service[]>([]);
   const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
   
@@ -192,14 +213,12 @@ export default function CustomerBooking({
       const dateString = format(d, 'yyyy-MM-dd');
       const exception = specialDays.find(ex => ex.date === dateString);
       
-      // Se c'è un'eccezione, mostra il giorno SOLO SE non è impostato come chiusura totale
       if (exception) {
         return !exception.isClosed;
       }
-      // Altrimenti, segui le regole standard di chiusura
-      return !CLOSED_DAYS.includes(getDay(d));
+      return !businessSettings.closedDays.includes(getDay(d));
     });
-  }, [specialDays]); // Ricalcola se cambiano le eccezioni!
+  }, [specialDays, businessSettings]);
 
   const [selectedDate, setSelectedDate] = useState<Date>(next7Days[0] || new Date());
   const [availableSlots, setAvailableSlots] = useState<Date[]>([]);
@@ -325,38 +344,28 @@ export default function CustomerBooking({
     } else {
       setAvailableSlots([]);
     }
-  }, [selectedDate, selectedServices]);
+  }, [selectedDate, selectedServices, businessSettings]);
 
-// Ascolta il click dalla notifica e lancia l'animazione
   useEffect(() => {
     if (selectedAppointmentId) {
-      // 1. Sposta sulla tab appuntamenti
       setActiveTab('appointments');
-      // 2. Imposta l'appuntamento da illuminare
       setHighlightedAppId(selectedAppointmentId);
 
-      // 3. Aspettiamo mezzo secondo (500ms) per essere CERTI che React 
-      // abbia renderizzato la nuova pagina, poi scorriamo con calma
       setTimeout(() => {
         const element = document.getElementById(`appointment-${selectedAppointmentId}`);
         if (element) {
-          // Centriamo l'elemento nello schermo dolcemente
           element.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }
       }, 500);
 
-      // 4. Aumentiamo il tempo del bagliore a 5 secondi per dare all'utente 
-      // il tempo di leggere comodamente la scheda annullata
       setTimeout(() => {
         setHighlightedAppId(null);
       }, 5000);
 
-      // Resetta l'ID notifica verso App.tsx
       if (onAppointmentDialogClose) onAppointmentDialogClose();
     }
   }, [selectedAppointmentId, onAppointmentDialogClose]);
 
-// Ascolta le eccezioni del calendario in tempo reale
   useEffect(() => {
     const q = query(collection(db, 'calendar_exceptions'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -375,19 +384,15 @@ export default function CustomerBooking({
     const dayEnd = endOfDay(selectedDate);
     
     const dateString = format(selectedDate, 'yyyy-MM-dd');
-    
-    // Legge le eccezioni vere scaricate da Firebase!
     const exceptionForToday = specialDays.find(ex => ex.date === dateString);
 
-    // 1. Controllo Chiusura
-    if (exceptionForToday?.isClosed || (!exceptionForToday && CLOSED_DAYS.includes(getDay(selectedDate)))) {
+    if (exceptionForToday?.isClosed || (!exceptionForToday && businessSettings.closedDays.includes(getDay(selectedDate)))) {
       setAvailableSlots([]);
       setLoading(false);
       return;
     }
 
-    // 2. Seleziona gli orari da usare
-    const activeOpeningHours = exceptionForToday?.openingHours || OPENING_HOURS;
+    const activeOpeningHours = exceptionForToday?.openingHours || businessSettings.openingHours;
 
     try {
       const q = query(
@@ -403,9 +408,7 @@ export default function CustomerBooking({
       const totalDuration = selectedServices.reduce((acc, s) => acc + s.duration, 0);
       const slots: Date[] = [];
 
-      // 3. Il ciclo usa 'activeOpeningHours' invece del vecchio OPENING_HOURS
       activeOpeningHours.forEach(range => {
-        // Estraiamo ore e minuti dai decimali (es. 8.5 -> 8 ore, 30 min)
         const startHour = Math.floor(range.start);
         const startMin = Math.round((range.start - startHour) * 60);
         let current = setMinutes(setHours(dayStart, startHour), startMin);
@@ -449,7 +452,7 @@ export default function CustomerBooking({
     setSelectedSlot(null);
   };
 
-const handleBooking = async (shouldUpdateProfilePhone: boolean = false) => {
+  const handleBooking = async (shouldUpdateProfilePhone: boolean = false) => {
     if (!selectedSlot || selectedServices.length === 0 || !profile) return;
 
     const fullPhone = phonePrefix + phoneNumber.replace(/\D/g, '');
@@ -475,14 +478,11 @@ const handleBooking = async (shouldUpdateProfilePhone: boolean = false) => {
     }
 
     if (!isForFriend && fullPhone !== profile.phoneNumber && !showPhoneUpdatePopup && !shouldUpdateProfilePhone) {
-            
-      // SE I NUMERI SONO DIVERSI: Mostra il popup e ferma l'esecuzione corrente
       if (fullPhone !== profile.phoneNumber) {
         setNewPhoneNumberToUpdate(fullPhone);
         setShowPhoneUpdatePopup(true);
         return; 
       }
-      // Se sono uguali, NON fa il return e la prenotazione procede normalmente!
     }
 
     setLoading(true);
@@ -492,7 +492,6 @@ const handleBooking = async (shouldUpdateProfilePhone: boolean = false) => {
     const endTime = addMinutes(selectedSlot, totalDuration);
 
     try {
-      // Verifica se esiste già una prenotazione nello stesso slot orario
       const qExisting = query(
         collection(db, 'appointments'),
         where('startTime', '==', Timestamp.fromDate(selectedSlot)),
@@ -506,7 +505,6 @@ const handleBooking = async (shouldUpdateProfilePhone: boolean = false) => {
         return;
       }
 
-      // Clean up cancelled appointments in same slot (only owned by user)
       const qCancelled = query(
         collection(db, 'appointments'),
         where('startTime', '==', Timestamp.fromDate(selectedSlot)),
@@ -523,7 +521,6 @@ const handleBooking = async (shouldUpdateProfilePhone: boolean = false) => {
         console.warn("Could not clean up cancelled appointments:", err);
       }
 
-      // Cancel active reschedule proposals in this slot
       const qProposals = query(
         collection(db, 'rescheduleProposals'),
         where('status', '==', 'active'),
@@ -564,7 +561,6 @@ const handleBooking = async (shouldUpdateProfilePhone: boolean = false) => {
         };
       }
 
-      // Catturiamo la reference (e quindi l'ID) del nuovo appuntamento
       const appointmentRef = await addDoc(collection(db, 'appointments'), appointmentData);
       
       try {
@@ -584,7 +580,6 @@ const handleBooking = async (shouldUpdateProfilePhone: boolean = false) => {
         console.warn("Could not notify barber:", err);
       }
       
-// -- INVIA EMAIL AL BARBIERE --
       notifySystemByEmail({
         type: 'new_booking',
         customerName: isForFriend ? `${friendFirstName} ${friendLastName}` : (profile?.displayName || 'Cliente'),
@@ -626,7 +621,7 @@ const handleBooking = async (shouldUpdateProfilePhone: boolean = false) => {
     }
   };
 
-const handleCancel = async (app: Appointment) => {
+  const handleCancel = async (app: Appointment) => {
     const now = new Date();
     const appStart = app.startTime.toDate();
     const createdAt = app.createdAt?.toDate ? app.createdAt.toDate() : new Date(0);
@@ -639,7 +634,6 @@ const handleCancel = async (app: Appointment) => {
     const hoursDiff = (appStart.getTime() - now.getTime()) / (1000 * 60 * 60);
     const isGracePeriod = differenceInMinutes(now, createdAt) <= 15;
 
-    // Se mancano meno di 6 ore E NON siamo nel periodo di grazia (15 minuti dopo aver prenotato), blocca tutto.
     if (hoursDiff < 6 && !isGracePeriod) {
       alert("Puoi annullare solo fino a 6 ore prima dell'appuntamento. (Hai 15 minuti di tempo dopo aver prenotato per correggere un eventuale errore).");
       return;
@@ -654,7 +648,6 @@ const handleCancel = async (app: Appointment) => {
 
       const barberSnapshot = await getDocs(query(collection(db, 'users'), where('role', '==', 'barber')));
       
-    // Crea una notifica separata per OGNI barbiere trovato
       for (const barberDoc of barberSnapshot.docs) {
         await addDoc(collection(db, 'notifications'), {
           userId: barberDoc.id,
@@ -667,7 +660,6 @@ const handleCancel = async (app: Appointment) => {
         });
       }
 
-      // -- INVIA EMAIL AL BARBIERE --
       notifySystemByEmail({
         type: 'cancellation',
         customerName: profile?.displayName || 'Cliente',
@@ -675,7 +667,6 @@ const handleCancel = async (app: Appointment) => {
         time: format(appStart, 'HH:mm'),
         services: app.services.map(s => s.name).join(', ')
       });
-      // -----------------------------------
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `appointments/${app.id}`);
     }
@@ -713,11 +704,9 @@ const handleCancel = async (app: Appointment) => {
         const myApp = appDoc.data() as Appointment;
         const duration = (myApp.endTime.toDate().getTime() - myApp.startTime.toDate().getTime());
         
-        // Usiamo l'orario specifico proposto dal barbiere
         const newStartTime = currentTarget.proposedStartTime ? currentTarget.proposedStartTime.toDate() : freshProposal.gapStartTime.toDate();
         const newEndTime = new Date(newStartTime.getTime() + duration);
 
-        // 1. Aggiorna l'appuntamento originale
         await updateDoc(doc(db, 'appointments', currentTarget.appointmentId), {
           startTime: Timestamp.fromDate(newStartTime),
           endTime: Timestamp.fromDate(newEndTime),
@@ -725,7 +714,6 @@ const handleCancel = async (app: Appointment) => {
           updatedAt: Timestamp.now()
         });
 
-        // 2. Elimina il gap appointment se esiste
         if (freshProposal.gapAppointmentId) {
           try {
             await deleteDoc(doc(db, 'appointments', freshProposal.gapAppointmentId));
@@ -734,7 +722,6 @@ const handleCancel = async (app: Appointment) => {
           }
         }
         
-        // 3. Notifica tutti i barbieri
         const barberSnapshot = await getDocs(query(collection(db, 'users'), where('role', '==', 'barber')));
         for (const barberDoc of barberSnapshot.docs) {
           await addDoc(collection(db, 'notifications'), {
@@ -748,7 +735,6 @@ const handleCancel = async (app: Appointment) => {
           });
         }
 
-        // -- EMAIL PROPOSTA ACCETTATA --
         notifySystemByEmail({
           type: 'proposal_accepted',
           customerName: profile?.displayName || 'Cliente',
@@ -760,13 +746,11 @@ const handleCancel = async (app: Appointment) => {
           }
         });
 
-        // 4. SOFT DELETE: Aggiorna lo stato della proposta a 'completed' (evita il crash di permessi)
         await updateDoc(proposalRef, { 
           status: 'completed',
           updatedAt: Timestamp.now()
         });
 
-        // 5. Pulizia notifiche locali dell'utente
         try {
           const notifQ = query(
             collection(db, 'notifications'), 
@@ -811,12 +795,10 @@ const handleCancel = async (app: Appointment) => {
           });
         }
 
-     // 3. Notifica i barbieri riguardo al rifiuto (con try/catch e numero di telefono per WhatsApp)
         try {
           const appDoc = await getDoc(doc(db, 'appointments', currentTarget.appointmentId));
           const myApp = appDoc.exists() ? (appDoc.data() as Appointment) : null;
           
-          // Estrapoliamo il numero in modo sicuro (amico o cliente principale)
           const customerPhone = myApp?.isForFriend 
             ? myApp?.friendDetails?.phone 
             : (myApp?.customer?.phoneNumber || profile?.phoneNumber || '');
@@ -832,14 +814,13 @@ const handleCancel = async (app: Appointment) => {
               createdAt: Timestamp.now(),
               declinedDetails: {
                 customerName: profile?.displayName || 'Cliente',
-                customerPhone: customerPhone, // <-- Fondamentale per WhatsApp
+                customerPhone: customerPhone,
                 originalTime: myApp?.startTime || proposal.gapStartTime,
                 proposedTime: currentTarget.proposedStartTime || proposal.gapStartTime
               }
             });
           }
 
-          // EMAIL PROPOSTA RIFIUTATA --
           notifySystemByEmail({
             type: 'proposal_declined',
             customerName: profile?.displayName || 'Cliente',
@@ -856,7 +837,6 @@ const handleCancel = async (app: Appointment) => {
         }
       }
 
-      // Pulizia notifiche destinate ESCLUSIVAMENTE all'utente corrente
       if (profile?.uid) {
         const userNotifQ = query(
           collection(db, 'notifications'),
@@ -884,24 +864,21 @@ const handleCancel = async (app: Appointment) => {
     }
   };
 
-  // 1. Prossimi Appuntamenti: Includiamo i "booked" e i "cancelled" futuri
   const upcomingAppointments = myAppointments
     .filter(a => (a.status === 'booked' || a.status === 'cancelled') && a.startTime.toDate() > new Date())
     .sort((a, b) => a.startTime.toMillis() - b.startTime.toMillis());
     
-  // 2. Active Appointment: Il box gigante in alto deve mostrare SOLO il prossimo confermato
   const activeAppointment = upcomingAppointments.find(a => a.status === 'booked');
 
-  // 3. Storico Appuntamenti: Completati, Passati, Annullati passati, O quello cliccato dalla notifica
   const pastAppointments = myAppointments
     .filter(a => 
       a.status === 'completed' || 
       (a.status === 'cancelled' && a.startTime.toDate() <= new Date()) ||
       (a.status === 'booked' && a.startTime.toDate() <= new Date()) ||
-      a.id === highlightedAppId // <-- TRUCCO DA ESPERTI: Forza la visualizzazione se ci hai cliccato!
+      a.id === highlightedAppId
     )
     .sort((a, b) => b.startTime.toMillis() - a.startTime.toMillis())
-    .slice(0, 10); // Aumentato da 3 a 10 per dare più profondità allo storico
+    .slice(0, 10);
 
   return (
     <div className="max-w-4xl mx-auto pb-32 px-4 sm:px-6 overflow-x-hidden w-full">
@@ -938,441 +915,438 @@ const handleCancel = async (app: Appointment) => {
 
       {activeTab === 'booking' && (
         <div className="space-y-12 animate-in fade-in duration-500">
-      {/* Reschedule Proposals */}
-      {proposals.length > 0 && (
-        <div className="space-y-4">
-          {proposals.map(proposal => (
-            <button 
-              key={proposal.id} 
-              onClick={() => setSelectedProposal(proposal)}
-              className="w-full bg-emerald-600 text-white rounded-3xl p-4 sm:p-6 shadow-xl animate-in slide-in-from-top-4 text-left group hover:bg-emerald-700 transition-all"
-            >
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-2 text-emerald-200 text-xs font-bold uppercase tracking-widest">
-                  <ArrowUpCircle size={16} /> Proposta di anticipo
-                </div>
-                <div className="text-[10px] bg-white/20 px-2 py-0.5 rounded-full font-bold">
-                  Scade tra {Math.max(0, Math.ceil((proposal.targets[proposal.currentIdx].expiresAt.toDate().getTime() - currentTime.getTime()) / 60000))} min
-                </div>
-              </div>
-              <div className="flex items-center gap-4">
-                <div className="flex-1">
-                  <p className="text-sm opacity-90 mb-1">Il barbiere ti propone di anticipare:</p>
-                  <div className="flex items-center gap-3">
-                    <span className="text-xl font-bold">{format((proposal.targets[proposal.currentIdx].proposedStartTime || proposal.gapStartTime).toDate(), 'HH:mm')}</span>
-                    <span className="text-xs opacity-60">invece di</span>
-                    <span className="text-sm opacity-70 line-through">
-                      {format(myAppointments.find(a => a.id === proposal.targets[proposal.currentIdx].appointmentId)?.startTime.toDate() || new Date(), 'HH:mm')}
-                    </span>
-                  </div>
-                </div>
-                <div className="w-10 h-10 bg-white/10 rounded-full flex items-center justify-center group-hover:scale-110 transition-transform">
-                  <ChevronRight size={20} />
-                </div>
-              </div>
-            </button>
-          ))}
-        </div>
-      )}
-
-      {/* Proposal Detail Modal */}
-      {selectedProposal && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100] p-4 animate-in fade-in">
-          <div className="bg-white/95 backdrop-blur-xl w-full max-w-md rounded-[32px] overflow-hidden shadow-2xl border border-white/20 animate-in zoom-in-95 max-h-[90vh] flex flex-col">
-            <div className="p-6 border-b border-gray-100/50 flex justify-between items-center bg-emerald-600/90 text-white flex-shrink-0">
-              <h3 className="text-xl font-bold">Dettaglio Proposta</h3>
-              <button onClick={() => setSelectedProposal(null)} className="p-1 hover:bg-white/10 rounded-full">
-                <XCircle size={24} />
-              </button>
-            </div>
-            <div className="p-6 sm:p-8 space-y-6 overflow-y-auto">
-              <div className="flex items-center gap-4">
-                <div className="w-16 h-16 bg-emerald-50 rounded-2xl flex items-center justify-center text-emerald-600 flex-shrink-0">
-                  <Clock size={32} />
-                </div>
-                <div>
-                  <div className="text-xs font-bold text-emerald-600 uppercase tracking-widest mb-1">Nuovo Orario Proposto</div>
-                  <div className="text-3xl font-bold">{format((selectedProposal.targets[selectedProposal.currentIdx].proposedStartTime || selectedProposal.gapStartTime).toDate(), 'HH:mm')}</div>
-                  <div className="text-[10px] text-emerald-600 font-bold uppercase mt-1">
-                    Scade tra {Math.max(0, Math.ceil((selectedProposal.targets[selectedProposal.currentIdx].expiresAt.toDate().getTime() - currentTime.getTime()) / 60000))} min
-                  </div>
-                  <div className="text-sm text-emerald-600/70 font-medium">
-                    {format(selectedProposal.gapStartTime.toDate(), 'EEEE d MMMM yyyy', { locale: it })}
-                  </div>
-                </div>
-              </div>
-
-              <div className="p-4 bg-gray-50 rounded-2xl space-y-2 border border-gray-100">
-                <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Il tuo appuntamento attuale</div>
-                <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-1">
-                  <div className="font-bold text-gray-700">
-                    {format(myAppointments.find(a => a.id === selectedProposal.targets[selectedProposal.currentIdx].appointmentId)?.startTime.toDate() || new Date(), 'EEEE d MMMM yyyy', { locale: it })}
-                  </div>
-                  <div className="text-sm font-bold text-gray-500 bg-white px-2 py-1 rounded-lg border border-gray-100 inline-block w-fit">
-                    {format(myAppointments.find(a => a.id === selectedProposal.targets[selectedProposal.currentIdx].appointmentId)?.startTime.toDate() || new Date(), 'HH:mm')}
-                  </div>
-                </div>
-              </div>
-
-              <div className="space-y-3">
-                <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Servizi Prenotati</div>
-                <div className="flex flex-wrap gap-2">
-                  {myAppointments.find(a => a.id === selectedProposal.targets[selectedProposal.currentIdx].appointmentId)?.services.map(s => (
-                    <span key={s.id} className="px-3 py-1.5 bg-black text-white rounded-full text-xs font-bold flex items-center gap-2">
-                      <Scissors size={12} /> {s.name}
-                    </span>
-                  ))}
-                </div>
-              </div>
-
-              <div className="pt-6 border-t border-gray-100 flex flex-col gap-3">
-                <button
-                  disabled={loading}
-                  onClick={() => handleProposalAction(selectedProposal, 'accepted')}
-                  className="w-full py-4 bg-emerald-600 text-white rounded-2xl font-bold hover:bg-emerald-700 transition-all flex items-center justify-center gap-2"
+          {/* Reschedule Proposals */}
+          {proposals.length > 0 && (
+            <div className="space-y-4">
+              {proposals.map(proposal => (
+                <button 
+                  key={proposal.id} 
+                  onClick={() => setSelectedProposal(proposal)}
+                  className="w-full bg-emerald-600 text-white rounded-3xl p-4 sm:p-6 shadow-xl animate-in slide-in-from-top-4 text-left group hover:bg-emerald-700 transition-all"
                 >
-                  Accetta Cambio
-                </button>
-                <button
-                  disabled={loading}
-                  onClick={() => handleProposalAction(selectedProposal, 'declined')}
-                  className="w-full py-4 bg-red-50 text-red-600 rounded-2xl font-bold hover:bg-red-100 transition-all"
-                >
-                  Rifiuta
-                </button>
-                <button
-                  onClick={() => setSelectedProposal(null)}
-                  className="w-full py-4 bg-gray-100 text-gray-600 rounded-2xl font-bold hover:bg-gray-200 transition-all"
-                >
-                  Chiudi
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Active Appointment Reminder */}
-      {activeAppointment && (
-        <div className="bg-black/80 backdrop-blur-md text-white rounded-[32px] p-8 shadow-2xl relative overflow-hidden border border-white/10">
-          <div className="relative z-10">
-            <div className="flex items-center gap-2 text-gray-400 text-sm font-bold uppercase tracking-widest mb-4">
-              <CheckCircle2 size={16} className="text-emerald-400" />
-              Il tuo prossimo appuntamento
-            </div>
-            <div className="flex flex-col md:flex-row justify-between gap-6">
-              <div>
-                <div className="text-4xl font-bold mb-2">
-                  {format(activeAppointment.startTime.toDate(), 'HH:mm')}
-                </div>
-                <div className="text-xl text-gray-300">
-                  {format(activeAppointment.startTime.toDate(), 'EEEE d MMMM', { locale: it })}
-                </div>
-              </div>
-              <div className="flex flex-col justify-end items-start md:items-end gap-4">
-                <div className="flex gap-2">
-                  {activeAppointment.services.map(s => (
-                    <span key={s.id} className="px-3 py-1 bg-white/10 rounded-full text-xs border border-white/20">
-                      {s.name}
-                    </span>
-                  ))}
-                </div>
-                {activeAppointment.status === 'booked' && !isBefore(activeAppointment.startTime.toDate(), new Date()) && (
-                  <button
-                    onClick={() => setShowCancelConfirm(activeAppointment)}
-                    className="text-sm text-red-400 hover:text-red-300 transition-colors flex items-center gap-1"
-                  >
-                    <XCircle size={16} /> Annulla prenotazione
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-          <Scissors className="absolute -bottom-8 -right-8 text-white/5 w-48 h-48 rotate-12" />
-        </div>
-      )}
-
-      {bookingSuccess && (
-        <div className="bg-emerald-50/80 backdrop-blur-sm border border-emerald-100 text-emerald-700 p-4 rounded-2xl flex items-center gap-3 animate-in fade-in">
-          <CheckCircle2 className="text-emerald-500" />
-          Prenotazione effettuata con successo!
-        </div>
-      )}
-
-      <div className="grid md:grid-cols-2 gap-8">
-        <section className="space-y-6 bg-white/80 backdrop-blur-md p-4 sm:p-6 rounded-3xl border border-white/20 shadow-xl">
-          <h2 className="text-2xl font-bold flex items-center gap-2">
-            <span className="w-8 h-8 bg-black text-white rounded-full flex items-center justify-center text-sm">1</span>
-            Scegli i servizi
-          </h2>
-          <div className="grid gap-4">
-            {SERVICES.map(service => (
-              <button
-                key={service.id}
-                onClick={() => toggleService(service)}
-                className={`w-full p-4 rounded-2xl border text-left transition-all flex justify-between items-center ${
-                  selectedServices.find(s => s.id === service.id)
-                  ? 'border-black bg-black text-white shadow-lg'
-                  : 'border-gray-400 hover:border-black bg-white'
-                }`}
-              >
-                <div>
-                  <div className="font-bold">{service.name}</div>
-                  {/* INIZIO DESCRIZIONE */}
-                  {service.description && (
-                    <div className={cn("text-xs mt-0.5 mb-1 leading-tight", selectedServices.find(s => s.id === service.id) ? "text-gray-300" : "text-gray-500")}>
-                      {service.description}
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2 text-emerald-200 text-xs font-bold uppercase tracking-widest">
+                      <ArrowUpCircle size={16} /> Proposta di anticipo
                     </div>
-                  )}
-                  {/* FINE DESCRIZIONE */}
-                  <div className={`text-sm ${selectedServices.find(s => s.id === service.id) ? 'text-gray-400' : 'text-gray-500 font-medium'}`}>
-                    {service.duration} min • €{service.price}
+                    <div className="text-[10px] bg-white/20 px-2 py-0.5 rounded-full font-bold">
+                      Scade tra {Math.max(0, Math.ceil((proposal.targets[proposal.currentIdx].expiresAt.toDate().getTime() - currentTime.getTime()) / 60000))} min
+                    </div>
                   </div>
-                </div>
-                {selectedServices.find(s => s.id === service.id) && <CheckCircle2 size={20} />}
-              </button>
-            ))}
-          </div>
-          {selectedServices.length > 0 && (
-            <div className="p-4 bg-gray-50 rounded-2xl border border-gray-100">
-              <div className="flex justify-between text-sm mb-1">
-                <span className="text-gray-500">Durata totale:</span>
-                <span className="font-bold">{selectedServices.reduce((acc, s) => acc + s.duration, 0)} min</span>
-              </div>
-              <div className="flex justify-between text-lg">
-                <span className="font-bold">Totale:</span>
-                <span className="font-bold">€{selectedServices.reduce((acc, s) => acc + s.price, 0)}</span>
-              </div>
-            </div>
-          )}
-        </section>
-
-        <section className="space-y-6 bg-white/80 backdrop-blur-md p-4 sm:p-6 rounded-3xl border border-white/20 shadow-xl">
-          <h2 className="text-2xl font-bold flex items-center gap-2">
-            <span className="w-8 h-8 bg-black text-white rounded-full flex items-center justify-center text-sm">2</span>
-            Scegli data e ora
-          </h2>
-          
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Data</div>
-              <button 
-                onClick={() => setShowCalendar(true)}
-                className="flex items-center gap-2 text-xs font-bold text-black bg-gray-100 px-3 py-2 rounded-xl hover:bg-gray-200 transition-all"
-              >
-                <CalendarIcon size={14} />
-                Calendario
-              </button>
-            </div>
-
-            <div className="hidden sm:flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
-              {next7Days.map(date => (
-                <button
-                  key={date.toISOString()}
-                  onClick={() => { setSelectedDate(date); setSelectedSlot(null); }}
-                  className={`flex-shrink-0 w-20 py-4 rounded-2xl border transition-all flex flex-col items-center gap-1 ${
-                    isSameDay(date, selectedDate)
-                    ? 'border-black bg-black text-white shadow-lg'
-                    : 'border-gray-400 hover:border-black bg-white'
-                  }`}
-                >
-                  <span className="text-xs uppercase font-bold opacity-60">{format(date, 'EEE', { locale: it })}</span>
-                  <span className="text-xl font-bold">{format(date, 'd')}</span>
+                  <div className="flex items-center gap-4">
+                    <div className="flex-1">
+                      <p className="text-sm opacity-90 mb-1">Il barbiere ti propone di anticipare:</p>
+                      <div className="flex items-center gap-3">
+                        <span className="text-xl font-bold">{format((proposal.targets[proposal.currentIdx].proposedStartTime || proposal.gapStartTime).toDate(), 'HH:mm')}</span>
+                        <span className="text-xs opacity-60">invece di</span>
+                        <span className="text-sm opacity-70 line-through">
+                          {format(myAppointments.find(a => a.id === proposal.targets[proposal.currentIdx].appointmentId)?.startTime.toDate() || new Date(), 'HH:mm')}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="w-10 h-10 bg-white/10 rounded-full flex items-center justify-center group-hover:scale-110 transition-transform">
+                      <ChevronRight size={20} />
+                    </div>
+                  </div>
                 </button>
               ))}
             </div>
+          )}
 
-            <div className="sm:hidden relative">
-              <select
-                value={selectedDate.toISOString()}
-                onChange={(e) => {
-                  const date = new Date(e.target.value);
-                  setSelectedDate(date);
-                  setSelectedSlot(null);
-                }}
-                className="w-full p-4 bg-white border border-gray-400 rounded-2xl font-bold appearance-none focus:border-black outline-none"
-              >
-                {next7Days.map(date => (
-                  <option key={date.toISOString()} value={date.toISOString()}>
-                    {format(date, 'EEEE d MMMM', { locale: it })}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" size={20} />
+          {/* Proposal Detail Modal */}
+          {selectedProposal && (
+            <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100] p-4 animate-in fade-in">
+              <div className="bg-white/95 backdrop-blur-xl w-full max-w-md rounded-[32px] overflow-hidden shadow-2xl border border-white/20 animate-in zoom-in-95 max-h-[90vh] flex flex-col">
+                <div className="p-6 border-b border-gray-100/50 flex justify-between items-center bg-emerald-600/90 text-white flex-shrink-0">
+                  <h3 className="text-xl font-bold">Dettaglio Proposta</h3>
+                  <button onClick={() => setSelectedProposal(null)} className="p-1 hover:bg-white/10 rounded-full">
+                    <XCircle size={24} />
+                  </button>
+                </div>
+                <div className="p-6 sm:p-8 space-y-6 overflow-y-auto">
+                  <div className="flex items-center gap-4">
+                    <div className="w-16 h-16 bg-emerald-50 rounded-2xl flex items-center justify-center text-emerald-600 flex-shrink-0">
+                      <Clock size={32} />
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold text-emerald-600 uppercase tracking-widest mb-1">Nuovo Orario Proposto</div>
+                      <div className="text-3xl font-bold">{format((selectedProposal.targets[selectedProposal.currentIdx].proposedStartTime || selectedProposal.gapStartTime).toDate(), 'HH:mm')}</div>
+                      <div className="text-[10px] text-emerald-600 font-bold uppercase mt-1">
+                        Scade tra {Math.max(0, Math.ceil((selectedProposal.targets[selectedProposal.currentIdx].expiresAt.toDate().getTime() - currentTime.getTime()) / 60000))} min
+                      </div>
+                      <div className="text-sm text-emerald-600/70 font-medium">
+                        {format(selectedProposal.gapStartTime.toDate(), 'EEEE d MMMM yyyy', { locale: it })}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="p-4 bg-gray-50 rounded-2xl space-y-2 border border-gray-100">
+                    <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Il tuo appuntamento attuale</div>
+                    <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-1">
+                      <div className="font-bold text-gray-700">
+                        {format(myAppointments.find(a => a.id === selectedProposal.targets[selectedProposal.currentIdx].appointmentId)?.startTime.toDate() || new Date(), 'EEEE d MMMM yyyy', { locale: it })}
+                      </div>
+                      <div className="text-sm font-bold text-gray-500 bg-white px-2 py-1 rounded-lg border border-gray-100 inline-block w-fit">
+                        {format(myAppointments.find(a => a.id === selectedProposal.targets[selectedProposal.currentIdx].appointmentId)?.startTime.toDate() || new Date(), 'HH:mm')}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3">
+                    <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Servizi Prenotati</div>
+                    <div className="flex flex-wrap gap-2">
+                      {myAppointments.find(a => a.id === selectedProposal.targets[selectedProposal.currentIdx].appointmentId)?.services.map(s => (
+                        <span key={s.id} className="px-3 py-1.5 bg-black text-white rounded-full text-xs font-bold flex items-center gap-2">
+                          <Scissors size={12} /> {s.name}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="pt-6 border-t border-gray-100 flex flex-col gap-3">
+                    <button
+                      disabled={loading}
+                      onClick={() => handleProposalAction(selectedProposal, 'accepted')}
+                      className="w-full py-4 bg-emerald-600 text-white rounded-2xl font-bold hover:bg-emerald-700 transition-all flex items-center justify-center gap-2"
+                    >
+                      Accetta Cambio
+                    </button>
+                    <button
+                      disabled={loading}
+                      onClick={() => handleProposalAction(selectedProposal, 'declined')}
+                      className="w-full py-4 bg-red-50 text-red-600 rounded-2xl font-bold hover:bg-red-100 transition-all"
+                    >
+                      Rifiuta
+                    </button>
+                    <button
+                      onClick={() => setSelectedProposal(null)}
+                      className="w-full py-4 bg-gray-100 text-gray-600 rounded-2xl font-bold hover:bg-gray-200 transition-all"
+                    >
+                      Chiudi
+                    </button>
+                  </div>
+                </div>
+              </div>
             </div>
-          </div>
+          )}
 
-          <div className="space-y-4">
-            <div className="text-sm font-bold text-gray-400 uppercase tracking-widest">Orari disponibili</div>
-            {selectedServices.length === 0 ? (
-              <div className="text-gray-400 text-sm italic">Seleziona almeno un servizio per vedere gli orari.</div>
-            ) : loading ? (
-              <div className="flex items-center gap-2 text-gray-400">
-                <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-black"></div>
-                Calcolo orari...
+          {/* Active Appointment Reminder */}
+          {activeAppointment && (
+            <div className="bg-black/80 backdrop-blur-md text-white rounded-[32px] p-8 shadow-2xl relative overflow-hidden border border-white/10">
+              <div className="relative z-10">
+                <div className="flex items-center gap-2 text-gray-400 text-sm font-bold uppercase tracking-widest mb-4">
+                  <CheckCircle2 size={16} className="text-emerald-400" />
+                  Il tuo prossimo appuntamento
+                </div>
+                <div className="flex flex-col md:flex-row justify-between gap-6">
+                  <div>
+                    <div className="text-4xl font-bold mb-2">
+                      {format(activeAppointment.startTime.toDate(), 'HH:mm')}
+                    </div>
+                    <div className="text-xl text-gray-300">
+                      {format(activeAppointment.startTime.toDate(), 'EEEE d MMMM', { locale: it })}
+                    </div>
+                  </div>
+                  <div className="flex flex-col justify-end items-start md:items-end gap-4">
+                    <div className="flex gap-2">
+                      {activeAppointment.services.map(s => (
+                        <span key={s.id} className="px-3 py-1 bg-white/10 rounded-full text-xs border border-white/20">
+                          {s.name}
+                        </span>
+                      ))}
+                    </div>
+                    {activeAppointment.status === 'booked' && !isBefore(activeAppointment.startTime.toDate(), new Date()) && (
+                      <button
+                        onClick={() => setShowCancelConfirm(activeAppointment)}
+                        className="text-sm text-red-400 hover:text-red-300 transition-colors flex items-center gap-1"
+                      >
+                        <XCircle size={16} /> Annulla prenotazione
+                      </button>
+                    )}
+                  </div>
+                </div>
               </div>
-            ) : availableSlots.length === 0 ? (
-              <div className="bg-red-50 text-red-600 p-4 rounded-xl text-sm flex items-center gap-2">
-                <AlertCircle size={16} /> Nessun orario disponibile per questa data.
-              </div>
-            ) : (
-              <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
-                {availableSlots.map(slot => (
+              <Scissors className="absolute -bottom-8 -right-8 text-white/5 w-48 h-48 rotate-12" />
+            </div>
+          )}
+
+          {bookingSuccess && (
+            <div className="bg-emerald-50/80 backdrop-blur-sm border border-emerald-100 text-emerald-700 p-4 rounded-2xl flex items-center gap-3 animate-in fade-in">
+              <CheckCircle2 className="text-emerald-500" />
+              Prenotazione effettuata con successo!
+            </div>
+          )}
+
+          <div className="grid md:grid-cols-2 gap-8">
+            <section className="space-y-6 bg-white/80 backdrop-blur-md p-4 sm:p-6 rounded-3xl border border-white/20 shadow-xl">
+              <h2 className="text-2xl font-bold flex items-center gap-2">
+                <span className="w-8 h-8 bg-black text-white rounded-full flex items-center justify-center text-sm">1</span>
+                Scegli i servizi
+              </h2>
+              <div className="grid gap-4">
+                {SERVICES.map(service => (
                   <button
-                    key={slot.toISOString()}
-                    onClick={() => setSelectedSlot(slot)}
-                    className={`py-3 rounded-xl border text-sm font-bold transition-all ${
-                      selectedSlot && slot.getTime() === selectedSlot.getTime()
-                      ? 'border-black bg-black text-white shadow-md'
+                    key={service.id}
+                    onClick={() => toggleService(service)}
+                    className={`w-full p-4 rounded-2xl border text-left transition-all flex justify-between items-center ${
+                      selectedServices.find(s => s.id === service.id)
+                      ? 'border-black bg-black text-white shadow-lg'
                       : 'border-gray-400 hover:border-black bg-white'
                     }`}
                   >
-                    {format(slot, 'HH:mm')}
+                    <div>
+                      <div className="font-bold">{service.name}</div>
+                      {service.description && (
+                        <div className={cn("text-xs mt-0.5 mb-1 leading-tight", selectedServices.find(s => s.id === service.id) ? "text-gray-300" : "text-gray-500")}>
+                          {service.description}
+                        </div>
+                      )}
+                      <div className={`text-sm ${selectedServices.find(s => s.id === service.id) ? 'text-gray-400' : 'text-gray-500 font-medium'}`}>
+                        {service.duration} min • €{service.price}
+                      </div>
+                    </div>
+                    {selectedServices.find(s => s.id === service.id) && <CheckCircle2 size={20} />}
                   </button>
                 ))}
               </div>
-            )}
-          </div>
-
-          {selectedSlot && (
-            <div className="space-y-6 pt-4 border-t border-gray-100">
-              <div className="flex items-center gap-3 p-4 bg-gray-50 rounded-2xl border border-gray-100">
-                <input
-                  type="checkbox"
-                  id="forFriend"
-                  checked={isForFriend}
-                  onChange={(e) => setIsForFriend(e.target.checked)}
-                  className="w-5 h-5 rounded border-gray-300 text-black focus:ring-black"
-                />
-                <label htmlFor="forFriend" className="text-sm font-bold cursor-pointer">
-                  Prenota per un amico
-                </label>
-              </div>
-
-              {isForFriend ? (
-                <div className="space-y-4 animate-in fade-in slide-in-from-top-2">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Nome Amico</label>
-                      <input
-                        type="text"
-                        value={friendFirstName}
-                        onChange={(e) => setFriendFirstName(e.target.value)}
-                        className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-black outline-none text-sm"
-                        placeholder="Nome"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Cognome Amico</label>
-                      <input
-                        type="text"
-                        value={friendLastName}
-                        onChange={(e) => setFriendLastName(e.target.value)}
-                        className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-black outline-none text-sm"
-                        placeholder="Cognome"
-                      />
-                    </div>
+              {selectedServices.length > 0 && (
+                <div className="p-4 bg-gray-50 rounded-2xl border border-gray-100">
+                  <div className="flex justify-between text-sm mb-1">
+                    <span className="text-gray-500">Durata totale:</span>
+                    <span className="font-bold">{selectedServices.reduce((acc, s) => acc + s.duration, 0)} min</span>
                   </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Email Amico</label>
-                    <input
-                      type="email"
-                      value={friendEmail}
-                      onChange={(e) => setFriendEmail(e.target.value)}
-                      className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-black outline-none text-sm"
-                      placeholder="email@esempio.com"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Telefono Amico</label>
-                    <input
-                      type="tel"
-                      value={friendPhone}
-                      onChange={(e) => setFriendPhone(e.target.value.replace(/\D/g, ''))}
-                      className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-black outline-none text-sm"
-                      placeholder="Min. 10 cifre"
-                    />
-                  </div>
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-gray-400 uppercase tracking-widest">Il tuo numero di telefono</label>
-                  <div className="flex gap-2">
-                    <div className="relative w-32">
-                      <Globe className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
-                      <select
-                        value={phonePrefix}
-                        onChange={(e) => setPhonePrefix(e.target.value)}
-                        className="w-full pl-9 pr-2 py-3 rounded-xl border border-gray-200 focus:border-black focus:ring-0 outline-none appearance-none bg-white text-sm"
-                      >
-                        {COUNTRY_CODES.map(c => (
-                          <option key={c.code} value={c.dial_code}>{c.flag} {c.dial_code}</option>
-                        ))}
-                      </select>
-                    </div>
-                    <div className="relative flex-1">
-                      <Phone className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
-                      <input
-                        type="tel"
-                        value={phoneNumber}
-                        onChange={(e) => setPhoneNumber(e.target.value.replace(/\D/g, ''))}
-                        placeholder="Min. 10 cifre"
-                        className="w-full pl-12 pr-4 py-3 rounded-xl border border-gray-200 focus:border-black focus:ring-0 outline-none transition-all"
-                      />
-                    </div>
+                  <div className="flex justify-between text-lg">
+                    <span className="font-bold">Totale:</span>
+                    <span className="font-bold">€{selectedServices.reduce((acc, s) => acc + s.price, 0)}</span>
                   </div>
                 </div>
               )}
+            </section>
 
+            <section className="space-y-6 bg-white/80 backdrop-blur-md p-4 sm:p-6 rounded-3xl border border-white/20 shadow-xl">
+              <h2 className="text-2xl font-bold flex items-center gap-2">
+                <span className="w-8 h-8 bg-black text-white rounded-full flex items-center justify-center text-sm">2</span>
+                Scegli data e ora
+              </h2>
+              
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Data</div>
+                  <button 
+                    onClick={() => setShowCalendar(true)}
+                    className="flex items-center gap-2 text-xs font-bold text-black bg-gray-100 px-3 py-2 rounded-xl hover:bg-gray-200 transition-all"
+                  >
+                    <CalendarIcon size={14} />
+                    Calendario
+                  </button>
+                </div>
 
-              <button
-                onClick={() => handleBooking()}
-                disabled={loading || (!isForFriend && phoneNumber.length < 10) || (isForFriend && friendPhone.length < 10)}
-                className="w-full py-4 bg-black text-white rounded-2xl font-bold hover:bg-gray-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-              >
-                {loading ? 'Prenotazione in corso...' : 'Conferma Prenotazione'}
-                <ChevronRight size={20} />
-              </button>
+                <div className="hidden sm:flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
+                  {next7Days.map(date => (
+                    <button
+                      key={date.toISOString()}
+                      onClick={() => { setSelectedDate(date); setSelectedSlot(null); }}
+                      className={`flex-shrink-0 w-20 py-4 rounded-2xl border transition-all flex flex-col items-center gap-1 ${
+                        isSameDay(date, selectedDate)
+                        ? 'border-black bg-black text-white shadow-lg'
+                        : 'border-gray-400 hover:border-black bg-white'
+                      }`}
+                    >
+                      <span className="text-xs uppercase font-bold opacity-60">{format(date, 'EEE', { locale: it })}</span>
+                      <span className="text-xl font-bold">{format(date, 'd')}</span>
+                    </button>
+                  ))}
+                </div>
+
+                <div className="sm:hidden relative">
+                  <select
+                    value={selectedDate.toISOString()}
+                    onChange={(e) => {
+                      const date = new Date(e.target.value);
+                      setSelectedDate(date);
+                      setSelectedSlot(null);
+                    }}
+                    className="w-full p-4 bg-white border border-gray-400 rounded-2xl font-bold appearance-none focus:border-black outline-none"
+                  >
+                    {next7Days.map(date => (
+                      <option key={date.toISOString()} value={date.toISOString()}>
+                        {format(date, 'EEEE d MMMM', { locale: it })}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" size={20} />
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <div className="text-sm font-bold text-gray-400 uppercase tracking-widest">Orari disponibili</div>
+                {selectedServices.length === 0 ? (
+                  <div className="text-gray-400 text-sm italic">Seleziona almeno un servizio per vedere gli orari.</div>
+                ) : loading ? (
+                  <div className="flex items-center gap-2 text-gray-400">
+                    <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-black"></div>
+                    Calcolo orari...
+                  </div>
+                ) : availableSlots.length === 0 ? (
+                  <div className="bg-red-50 text-red-600 p-4 rounded-xl text-sm flex items-center gap-2">
+                    <AlertCircle size={16} /> Nessun orario disponibile per questa data.
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+                    {availableSlots.map(slot => (
+                      <button
+                        key={slot.toISOString()}
+                        onClick={() => setSelectedSlot(slot)}
+                        className={`py-3 rounded-xl border text-sm font-bold transition-all ${
+                          selectedSlot && slot.getTime() === selectedSlot.getTime()
+                          ? 'border-black bg-black text-white shadow-md'
+                          : 'border-gray-400 hover:border-black bg-white'
+                        }`}
+                      >
+                        {format(slot, 'HH:mm')}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {selectedSlot && (
+                <div className="space-y-6 pt-4 border-t border-gray-100">
+                  <div className="flex items-center gap-3 p-4 bg-gray-50 rounded-2xl border border-gray-100">
+                    <input
+                      type="checkbox"
+                      id="forFriend"
+                      checked={isForFriend}
+                      onChange={(e) => setIsForFriend(e.target.checked)}
+                      className="w-5 h-5 rounded border-gray-300 text-black focus:ring-black"
+                    />
+                    <label htmlFor="forFriend" className="text-sm font-bold cursor-pointer">
+                      Prenota per un amico
+                    </label>
+                  </div>
+
+                  {isForFriend ? (
+                    <div className="space-y-4 animate-in fade-in slide-in-from-top-2">
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Nome Amico</label>
+                          <input
+                            type="text"
+                            value={friendFirstName}
+                            onChange={(e) => setFriendFirstName(e.target.value)}
+                            className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-black outline-none text-sm"
+                            placeholder="Nome"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Cognome Amico</label>
+                          <input
+                            type="text"
+                            value={friendLastName}
+                            onChange={(e) => setFriendLastName(e.target.value)}
+                            className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-black outline-none text-sm"
+                            placeholder="Cognome"
+                          />
+                        </div>
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Email Amico</label>
+                        <input
+                          type="email"
+                          value={friendEmail}
+                          onChange={(e) => setFriendEmail(e.target.value)}
+                          className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-black outline-none text-sm"
+                          placeholder="email@esempio.com"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Telefono Amico</label>
+                        <input
+                          type="tel"
+                          value={friendPhone}
+                          onChange={(e) => setFriendPhone(e.target.value.replace(/\D/g, ''))}
+                          className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-black outline-none text-sm"
+                          placeholder="Min. 10 cifre"
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-gray-400 uppercase tracking-widest">Il tuo numero di telefono</label>
+                      <div className="flex gap-2">
+                        <div className="relative w-32">
+                          <Globe className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+                          <select
+                            value={phonePrefix}
+                            onChange={(e) => setPhonePrefix(e.target.value)}
+                            className="w-full pl-9 pr-2 py-3 rounded-xl border border-gray-200 focus:border-black focus:ring-0 outline-none appearance-none bg-white text-sm"
+                          >
+                            {COUNTRY_CODES.map(c => (
+                              <option key={c.code} value={c.dial_code}>{c.flag} {c.dial_code}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="relative flex-1">
+                          <Phone className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+                          <input
+                            type="tel"
+                            value={phoneNumber}
+                            onChange={(e) => setPhoneNumber(e.target.value.replace(/\D/g, ''))}
+                            placeholder="Min. 10 cifre"
+                            className="w-full pl-12 pr-4 py-3 rounded-xl border border-gray-200 focus:border-black focus:ring-0 outline-none transition-all"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  <button
+                    onClick={() => handleBooking()}
+                    disabled={loading || (!isForFriend && phoneNumber.length < 10) || (isForFriend && friendPhone.length < 10)}
+                    className="w-full py-4 bg-black text-white rounded-2xl font-bold hover:bg-gray-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                  >
+                    {loading ? 'Prenotazione in corso...' : 'Conferma Prenotazione'}
+                    <ChevronRight size={20} />
+                  </button>
+                </div>
+              )}
+            </section>
+          </div>
+
+          {/* Phone Update Popup */}
+          {showPhoneUpdatePopup && (
+            <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[120] p-4 animate-in fade-in">
+              <div className="bg-white/95 backdrop-blur-xl w-full max-w-md rounded-[32px] p-8 shadow-2xl border border-white/20 animate-in zoom-in-95 text-center">
+                <div className="w-16 h-16 bg-emerald-50 text-emerald-600 rounded-2xl flex items-center justify-center mx-auto mb-6">
+                  <Phone size={32} />
+                </div>
+                <h3 className="text-2xl font-bold mb-2">Aggiorna Telefono?</h3>
+                <p className="text-gray-500 mb-8 leading-relaxed text-sm">
+                  Hai inserito un numero diverso da quello salvato nel tuo profilo. Desideri aggiornarlo permanentemente?
+                </p>
+                <div className="flex flex-col gap-3">
+                  <button
+                    onClick={() => handleBooking(true)}
+                    className="w-full py-4 bg-emerald-600 text-white rounded-2xl font-bold hover:bg-emerald-700 transition-all"
+                  >
+                    Sì, aggiorna e prenota
+                  </button>
+                  <button
+                    onClick={() => handleBooking(false)}
+                    className="w-full py-4 bg-gray-100 text-gray-600 rounded-2xl font-bold hover:bg-gray-200 transition-all"
+                  >
+                    No, prenota e basta
+                  </button>
+                  <button
+                    onClick={() => setShowPhoneUpdatePopup(false)}
+                    className="w-full py-2 text-xs text-gray-400 hover:underline"
+                  >
+                    Annulla
+                  </button>
+                </div>
+              </div>
             </div>
           )}
-        </section>
-      </div>
-
-      {/* Phone Update Popup */}
-      {showPhoneUpdatePopup && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[120] p-4 animate-in fade-in">
-          <div className="bg-white/95 backdrop-blur-xl w-full max-w-md rounded-[32px] p-8 shadow-2xl border border-white/20 animate-in zoom-in-95 text-center">
-            <div className="w-16 h-16 bg-emerald-50 text-emerald-600 rounded-2xl flex items-center justify-center mx-auto mb-6">
-              <Phone size={32} />
-            </div>
-            <h3 className="text-2xl font-bold mb-2">Aggiorna Telefono?</h3>
-            <p className="text-gray-500 mb-8 leading-relaxed text-sm">
-              Hai inserito un numero diverso da quello salvato nel tuo profilo. Desideri aggiornarlo permanentemente?
-            </p>
-            <div className="flex flex-col gap-3">
-              <button
-                onClick={() => handleBooking(true)}
-                className="w-full py-4 bg-emerald-600 text-white rounded-2xl font-bold hover:bg-emerald-700 transition-all"
-              >
-                Sì, aggiorna e prenota
-              </button>
-              <button
-                onClick={() => handleBooking(false)}
-                className="w-full py-4 bg-gray-100 text-gray-600 rounded-2xl font-bold hover:bg-gray-200 transition-all"
-              >
-                No, prenota e basta
-              </button>
-              <button
-                onClick={() => setShowPhoneUpdatePopup(false)}
-                className="w-full py-2 text-xs text-gray-400 hover:underline"
-              >
-                Annulla
-              </button>
-            </div>
-          </div>
         </div>
-      )}
-      </div>
       )}
 
       {activeTab === 'appointments' && (
@@ -1527,14 +1501,31 @@ const handleCancel = async (app: Appointment) => {
                   <Clock size={20} className="text-gray-400" />
                   <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Orari di Apertura</div>
                 </div>
+
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div className="flex justify-between items-center p-4 bg-white rounded-2xl shadow-sm border border-gray-100">
-                    <span className="text-gray-500 font-medium">Mar - Sab</span>
-                    <span className="font-bold text-gray-900">08:00 - 13:00, 14:00 - 20:00</span>
+                    <span className="text-gray-500 font-medium">Orari Turni</span>
+                    <div className="text-right">
+                      {businessSettings.openingHours.map((range, i) => {
+                        const startH = Math.floor(range.start);
+                        const startM = Math.round((range.start - startH) * 60);
+                        const endH = Math.floor(range.end);
+                        const endM = Math.round((range.end - endH) * 60);
+
+                        const timeStr = `${String(startH).padStart(2, '0')}:${String(startM).padStart(2, '0')} - ${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}`;
+
+                        return <div key={i} className="font-bold text-gray-900 text-xs">{timeStr}</div>;
+                      })}
+                    </div>
                   </div>
+
                   <div className="flex justify-between items-center p-4 bg-white rounded-2xl shadow-sm border border-gray-100">
-                    <span className="text-gray-500 font-medium">Dom - Lun</span>
-                    <span className="font-bold text-red-500">Chiuso</span>
+                    <span className="text-gray-500 font-medium">Giorni di Chiusura</span>
+                    <span className="font-bold text-red-500 text-xs">
+                      {businessSettings.closedDays.length > 0
+                        ? businessSettings.closedDays.map(d => ['Dom', 'Lun', 'Mar', 'Mer', 'Gio', 'Ven', 'Sab'][d]).join(', ')
+                        : 'Nessuno'}
+                    </span>
                   </div>
                 </div>
               </div>

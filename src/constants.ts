@@ -31,12 +31,13 @@ export const SERVICES: Service[] = [
   }
 ];
 
-export const OPENING_HOURS = [
-  { start: 8, end: 13 },
+// Fallback di default se non presenti su Firestore
+export const DEFAULT_OPENING_HOURS = [
+  { start: 8, end: 13 }, 
   { start: 15, end: 20 },
 ];
 
-export const CLOSED_DAYS = [0, 1]; // 0 = Sunday, 1 = Monday
+export const DEFAULT_CLOSED_DAYS = [0, 1]; // 0 = Domenica, 1 = Lunedì
 
 export const BARBER_EMAILS = [
   'do.maldera@libero.it',
