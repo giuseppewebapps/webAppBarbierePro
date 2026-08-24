@@ -24,6 +24,19 @@ export default function ScheduleMaintenanceModal({ onClose }: Props) {
   const [shift2Start, setShift2Start] = useState<number>(14);
   const [shift2End, setShift2End] = useState<number>(20);
 
+// Genera le opzioni per la tendina (scatti di 15 minuti)
+  const timeOptions = React.useMemo(() => {
+    const options = [];
+    for (let h = 0; h < 24; h++) {
+      for (let m = 0; m < 60; m += 15) {
+        const value = h + (m / 60); // Es. 8:30 diventa 8.5
+        const label = `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+        options.push({ value, label });
+      }
+    }
+    return options;
+  }, []);
+
   // Carica i dati esistenti se il giorno ha già un'eccezione
   useEffect(() => {
     const fetchException = async () => {
@@ -158,9 +171,13 @@ export default function ScheduleMaintenanceModal({ onClose }: Props) {
                 <div className="p-4 border border-gray-200 rounded-xl space-y-3">
                   <div className="text-xs font-bold text-gray-400 uppercase">Primo Turno</div>
                   <div className="flex items-center gap-4">
-                    <input type="number" value={shift1Start} onChange={e => setShift1Start(Number(e.target.value))} className="w-20 p-2 border rounded-lg text-center font-bold" min="0" max="23" />
-                    <span>fino alle</span>
-                    <input type="number" value={shift1End} onChange={e => setShift1End(Number(e.target.value))} className="w-20 p-2 border rounded-lg text-center font-bold" min="0" max="24" />
+                    <select value={shift1Start} onChange={e => setShift1Start(Number(e.target.value))} className="w-24 p-2 border rounded-lg text-center font-bold outline-none focus:border-black appearance-none bg-white cursor-pointer">
+                      {timeOptions.map(opt => <option key={`start1-${opt.value}`} value={opt.value}>{opt.label}</option>)}
+                    </select>
+                    <span className="text-sm font-medium text-gray-500">fino alle</span>
+                    <select value={shift1End} onChange={e => setShift1End(Number(e.target.value))} className="w-24 p-2 border rounded-lg text-center font-bold outline-none focus:border-black appearance-none bg-white cursor-pointer">
+                      {timeOptions.map(opt => <option key={`end1-${opt.value}`} value={opt.value}>{opt.label}</option>)}
+                    </select>
                   </div>
                 </div>
 
@@ -173,9 +190,13 @@ export default function ScheduleMaintenanceModal({ onClose }: Props) {
                   <div className="p-4 border border-gray-200 rounded-xl space-y-3 animate-in fade-in">
                     <div className="text-xs font-bold text-gray-400 uppercase">Secondo Turno</div>
                     <div className="flex items-center gap-4">
-                      <input type="number" value={shift2Start} onChange={e => setShift2Start(Number(e.target.value))} className="w-20 p-2 border rounded-lg text-center font-bold" min="0" max="23" />
-                      <span>fino alle</span>
-                      <input type="number" value={shift2End} onChange={e => setShift2End(Number(e.target.value))} className="w-20 p-2 border rounded-lg text-center font-bold" min="0" max="24" />
+                      <select value={shift2Start} onChange={e => setShift2Start(Number(e.target.value))} className="w-24 p-2 border rounded-lg text-center font-bold outline-none focus:border-black appearance-none bg-white cursor-pointer">
+                        {timeOptions.map(opt => <option key={`start2-${opt.value}`} value={opt.value}>{opt.label}</option>)}
+                      </select>
+                      <span className="text-sm font-medium text-gray-500">fino alle</span>
+                      <select value={shift2End} onChange={e => setShift2End(Number(e.target.value))} className="w-24 p-2 border rounded-lg text-center font-bold outline-none focus:border-black appearance-none bg-white cursor-pointer">
+                        {timeOptions.map(opt => <option key={`end2-${opt.value}`} value={opt.value}>{opt.label}</option>)}
+                      </select>
                     </div>
                   </div>
                 )}

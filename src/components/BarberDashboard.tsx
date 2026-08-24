@@ -1416,8 +1416,14 @@ const next30Days = React.useMemo(() => {
 
       // 5. Cicliamo sui nuovi orari attivi!
       activeOpeningHours.forEach(range => {
-        let current = setMinutes(setHours(dayStart, range.start), 0);
-        const rangeEnd = setMinutes(setHours(dayStart, range.end), 0);
+        // Estraiamo ore e minuti dai decimali (es. 8.5 -> 8 ore, 30 min)
+        const startHour = Math.floor(range.start);
+        const startMin = Math.round((range.start - startHour) * 60);
+        let current = setMinutes(setHours(dayStart, startHour), startMin);
+
+        const endHour = Math.floor(range.end);
+        const endMin = Math.round((range.end - endHour) * 60);
+        const rangeEnd = setMinutes(setHours(dayStart, endHour), endMin);
 
         while (!isAfter(addMinutes(current, totalDuration), rangeEnd)) {
           if (isAfter(current, new Date())) {
