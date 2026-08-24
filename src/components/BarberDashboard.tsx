@@ -776,7 +776,7 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
             
             // --- CALCOLO BUCHI ORARI (Intelligenza Artificiale - Tutte le Viste) ---
             const gapsForThisItem: {start: Date, end: Date, duration: number}[] = [];
-            if (!isBreak) {
+            if (!isBreak && !searchTerm) {
               // Se vista giornaliera: marker su singola ora. Altrimenti: sull'intera giornata (08:00 - 20:00)
               let currentMarker = calendarData.type === 'daily' ? item : setHours(startOfDay(item), 8);
               const endOfSlot = calendarData.type === 'daily' ? addHours(item, 1) : setHours(startOfDay(item), 20);
