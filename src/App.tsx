@@ -28,7 +28,7 @@ import BarberDashboard from './components/BarberDashboard';
 import CustomerBooking from './components/CustomerBooking';
 import { LogOut, Scissors, Plus, Clock as ClockIcon } from 'lucide-react';
 import NotificationBell from './components/NotificationBell';
-import { autoLinkAppointmentsByPhone } from './utils/appointmentLinker';
+import { autoLinkAppointments } from './utils/appointmentLinker';
 import { logSystemError } from './utils/logger';
 
 interface AuthContextType {
@@ -137,9 +137,9 @@ export default function App() {
           currentProfile = userDoc.data() as UserProfile;
         }
 
-        // Lanciamo la NUOVA riconciliazione basata sul TELEFONO
+        // Lanciamo la NUOVA riconciliazione basata su EMAIL e TELEFONO
         if (currentProfile.role === 'customer') {
-          autoLinkAppointmentsByPhone(currentProfile).catch(async (err) => {
+          autoLinkAppointments(currentProfile).catch(async (err) => {
             console.error("Errore durante l'autoLink:", err);
             await logSystemError({
               type: 'login_autolink_failure',

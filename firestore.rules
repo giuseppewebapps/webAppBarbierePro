@@ -93,7 +93,10 @@ service cloud.firestore {
       allow create: if isAuthenticated() && isValidAppointment(request.resource.data);
       allow update: if isAuthenticated() && (
         isAdmin() || 
-        (resource.data.customerId == request.auth.uid && isValidAppointment(request.resource.data))
+        // 1. Modifica standard: l'appuntamento è già del cliente
+        (resource.data.customerId == request.auth.uid && isValidAppointment(request.resource.data)) ||
+        // Il cliente assorbe un appuntamento orfano sovrascrivendo 'manual_entry' col proprio UID
+        (resource.data.customerId == 'manual_entry' && request.resource.data.customerId == request.auth.uid)
       );
       allow delete: if isAdmin() ||
                (isAuthenticated() && resource.data.status == 'cancelled') ||

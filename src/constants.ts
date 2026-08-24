@@ -33,7 +33,7 @@ export const SERVICES: Service[] = [
 
 export const OPENING_HOURS = [
   { start: 8, end: 13 },
-  { start: 14, end: 20 },
+  { start: 15, end: 20 },
 ];
 
 export const CLOSED_DAYS = [0, 1]; // 0 = Sunday, 1 = Monday
