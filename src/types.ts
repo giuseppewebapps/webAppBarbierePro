@@ -65,6 +65,7 @@ export interface RescheduleProposal {
     status: 'pending' | 'accepted' | 'declined' | 'expired' | 'waiting';
     notifiedAt?: any;
     expiresAt?: any;
+    proposedStartTime: any;
   }[];
   currentIdx: number;
   status: 'active' | 'completed' | 'cancelled';

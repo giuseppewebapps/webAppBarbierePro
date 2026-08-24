@@ -706,7 +706,9 @@ const handleCancel = async (app: Appointment) => {
 
         const myApp = appDoc.data() as Appointment;
         const duration = (myApp.endTime.toDate().getTime() - myApp.startTime.toDate().getTime());
-        const newStartTime = freshProposal.gapStartTime.toDate();
+        
+        // Usiamo l'orario specifico proposto dal barbiere
+        const newStartTime = currentTarget.proposedStartTime ? currentTarget.proposedStartTime.toDate() : freshProposal.gapStartTime.toDate();
         const newEndTime = new Date(newStartTime.getTime() + duration);
 
         // 1. Aggiorna l'appuntamento originale
@@ -826,7 +828,7 @@ const handleCancel = async (app: Appointment) => {
                 customerName: profile?.displayName || 'Cliente',
                 customerPhone: customerPhone, // <-- Fondamentale per WhatsApp
                 originalTime: myApp?.startTime || proposal.gapStartTime,
-                proposedTime: proposal.gapStartTime
+                proposedTime: currentTarget.proposedStartTime || proposal.gapStartTime
               }
             });
           }
@@ -951,7 +953,7 @@ const handleCancel = async (app: Appointment) => {
                 <div className="flex-1">
                   <p className="text-sm opacity-90 mb-1">Il barbiere ti propone di anticipare:</p>
                   <div className="flex items-center gap-3">
-                    <span className="text-xl font-bold">{format(proposal.gapStartTime.toDate(), 'HH:mm')}</span>
+                    <span className="text-xl font-bold">{format((proposal.targets[proposal.currentIdx].proposedStartTime || proposal.gapStartTime).toDate(), 'HH:mm')}</span>
                     <span className="text-xs opacity-60">invece di</span>
                     <span className="text-sm opacity-70 line-through">
                       {format(myAppointments.find(a => a.id === proposal.targets[proposal.currentIdx].appointmentId)?.startTime.toDate() || new Date(), 'HH:mm')}
@@ -984,7 +986,7 @@ const handleCancel = async (app: Appointment) => {
                 </div>
                 <div>
                   <div className="text-xs font-bold text-emerald-600 uppercase tracking-widest mb-1">Nuovo Orario Proposto</div>
-                  <div className="text-3xl font-bold">{format(selectedProposal.gapStartTime.toDate(), 'HH:mm')}</div>
+                  <div className="text-3xl font-bold">{format((selectedProposal.targets[selectedProposal.currentIdx].proposedStartTime || selectedProposal.gapStartTime).toDate(), 'HH:mm')}</div>
                   <div className="text-[10px] text-emerald-600 font-bold uppercase mt-1">
                     Scade tra {Math.max(0, Math.ceil((selectedProposal.targets[selectedProposal.currentIdx].expiresAt.toDate().getTime() - currentTime.getTime()) / 60000))} min
                   </div>

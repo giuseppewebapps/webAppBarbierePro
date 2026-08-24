@@ -27,6 +27,9 @@ export const generateWhatsAppLink = (
     case 'manual_management_required':
       message = `Ciao ${customerName}, ti scrivo in merito al tuo appuntamento del ${date}. Ci sarebbe da fare una piccola modifica, sentiamoci appena puoi!`;
       break;
+    case 'reschedule_proposal_sent':
+      message = `Ciao ${customerName}! Si è liberato un posto alle ${time}. Ti ho inviato una proposta di cambio orario direttamente sulla tua app Medo Hair Salon. Controlla e fammi sapere se riesci ad anticipare! 💈`;
+      break;
     default:
       return null;
   }

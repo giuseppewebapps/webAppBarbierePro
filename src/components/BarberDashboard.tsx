@@ -113,9 +113,11 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
   const [activeNotifType, setActiveNotifType] = useState<string | null>(null);
   const [showContactMenu, setShowContactMenu] = useState(false);
   const [showCancelConfirm, setShowCancelConfirm] = useState<Appointment | null>(null);
-  const [showGapFiller, setShowGapFiller] = useState<{ start: Date, end: Date, appointmentId: string } | null>(null);
+  const [showGapFiller, setShowGapFiller] = useState<{ start: Date, end: Date, appointmentId?: string } | null>(null);
   const [rescheduleCandidates, setRescheduleCandidates] = useState<(Appointment & { customer?: UserProfile })[]>([]);
   const [selectedCandidates, setSelectedCandidates] = useState<string[]>([]);
+  const [gapWizardStep, setGapWizardStep] = useState<1 | 2 | 3>(1);
+  const [gapPlacements, setGapPlacements] = useState<Record<string, Date>>({});
   const [isManualBookingOpen, setIsManualBookingOpen] = useState(false);
   const [isScheduleMaintenanceOpen, setIsScheduleMaintenanceOpen] = useState(false);
   const [viewMode, setViewMode] = useState<'daily' | 'weekly' | 'monthly'>('daily');
@@ -417,25 +419,37 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
     return customerName.includes(searchLower) || friendName.includes(searchLower);
   };
 
-  const handleProposeReschedule = async (gap: { start: Date, end: Date, appointmentId: string }) => {
-    if (selectedCandidates.length === 0) return;
+  // Formattazione intelligente per i buchi orari
+  const formatDurationText = (totalMinutes: number) => {
+    if (totalMinutes < 60) return `${totalMinutes} min`;
+    const hours = Math.floor(totalMinutes / 60);
+    const mins = totalMinutes % 60;
+    const hourStr = hours === 1 ? '1 ora' : `${hours} ore`;
+    return mins > 0 ? `${hourStr} e ${mins} min` : hourStr;
+  };
+
+  const handleProposeReschedule = async () => {
+    if (!showGapFiller || selectedCandidates.length === 0) return;
     setSendingProposal(true);
     try {
       const targets = selectedCandidates.map((id, idx) => {
         const candidate = rescheduleCandidates.find(c => c.id === id)!;
+        // Legge l'orario specifico posizionato manualmente, altrimenti defaulta all'inizio
+        const specificTime = gapPlacements[id] || showGapFiller.start; 
         return {
           userId: candidate.customerId,
           appointmentId: candidate.id!,
           status: idx === 0 ? 'pending' : 'waiting' as any,
           notifiedAt: idx === 0 ? Timestamp.now() : null,
-          expiresAt: idx === 0 ? Timestamp.fromDate(addMinutes(new Date(), 15)) : null
+          expiresAt: idx === 0 ? Timestamp.fromDate(addMinutes(new Date(), 15)) : null,
+          proposedStartTime: Timestamp.fromDate(specificTime) // IL DATO NUOVO!
         };
       });
 
       const proposalData: Partial<RescheduleProposal> = {
-        gapStartTime: Timestamp.fromDate(gap.start),
-        gapEndTime: Timestamp.fromDate(gap.end),
-        gapAppointmentId: gap.appointmentId,
+        gapStartTime: Timestamp.fromDate(showGapFiller.start),
+        gapEndTime: Timestamp.fromDate(showGapFiller.end),
+        gapAppointmentId: showGapFiller.appointmentId || '',
         targets,
         currentIdx: 0,
         status: 'active',
@@ -444,12 +458,13 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
 
       const proposalRef = await addDoc(collection(db, 'rescheduleProposals'), proposalData);
 
-      // Notify first candidate
       const firstTarget = targets[0];
+      const timeToDisplay = gapPlacements[selectedCandidates[0]] || showGapFiller.start;
+      
       await addDoc(collection(db, 'notifications'), {
         userId: firstTarget.userId,
         title: 'Proposta di Cambio Orario',
-        message: `Il barbiere ti propone di anticipare il tuo appuntamento del ${format(rescheduleCandidates.find(c => c.id === selectedCandidates[0])!.startTime.toDate(), 'd MMM')} alle ore ${format(gap.start, 'HH:mm')}. Hai 15 minuti per accettare!`,
+        message: `Il barbiere ti propone di anticipare il tuo appuntamento del ${format(rescheduleCandidates.find(c => c.id === selectedCandidates[0])!.startTime.toDate(), 'd MMM')} alle ore ${format(timeToDisplay, 'HH:mm')}. Hai 15 minuti per accettare!`,
         type: 'reschedule_proposal',
         read: false,
         createdAt: Timestamp.now(),
@@ -457,9 +472,8 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
         appointmentId: selectedCandidates[0]
       });
 
-      alert("Proposta inviata con successo alla coda selezionata!");
-      setShowGapFiller(null);
-      setSelectedCandidates([]);
+      // Invece di chiudere brutalmente, passiamo allo Step 3 per inviare i WhatsApp
+      setGapWizardStep(3);
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'rescheduleProposals');
     } finally {
@@ -467,24 +481,37 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
     }
   };
 
-  const findCandidatesForGap = (gap: { start: Date, end: Date, appointmentId: string }) => {
-    // 1. Calcola quanto dura esattamente il buco da riempire (in minuti)
-    const gapDuration = (gap.end.getTime() - gap.start.getTime()) / (1000 * 60);
+  const findCandidatesForGap = (clickedGap: { start: Date, end: Date, appointmentId?: string }) => {
+    // 1. Espansione Intelligente: Guardiamo in avanti per trovare la VERA fine del buco
+    const dayApps = appointments
+      .filter(a => isSameDay(a.startTime.toDate(), clickedGap.start) && a.status === 'booked')
+      .sort((a, b) => a.startTime.toMillis() - b.startTime.toMillis());
     
-    // 2. Cerca i candidati perfetti
+    let trueEnd = setHours(startOfDay(clickedGap.start), 20); // Default chiusura
+    const nextApp = dayApps.find(a => isAfter(a.startTime.toDate(), clickedGap.start) || a.startTime.toDate().getTime() === clickedGap.start.getTime());
+    
+    if (nextApp) { trueEnd = nextApp.startTime.toDate(); }
+    
+    const expandedGap = { ...clickedGap, end: trueEnd };
+    const gapDuration = (trueEnd.getTime() - clickedGap.start.getTime()) / (1000 * 60);
+
+    // 2. Cerca i candidati che "entrano" nel VERO buco
     const candidates = appointments.filter(app => {
       const appStart = app.startTime.toDate();
       const appDuration = (app.endTime.toDate().getTime() - app.startTime.toDate().getTime()) / (1000 * 60);
       
-      return app.status === 'booked' && // Deve essere un appuntamento valido
-             isAfter(appStart, currentTime) && // Deve avvenire DOPO il momento attuale
-             appDuration === gapDuration && // La durata deve essere IDENTICA al buco
-             app.id !== gap.appointmentId; // Sicurezza: esclude il buco stesso
-    }).sort((a, b) => a.startTime.toMillis() - b.startTime.toMillis()); // Ordina dal più vicino al più lontano
+      return app.status === 'booked' && 
+             isAfter(appStart, addMinutes(currentTime, 30)) && //(Buffer 30 min)
+             appDuration <= gapDuration && // Deve essere MINORE o UGUALE al buco
+             app.id !== expandedGap.appointmentId;
+    }).sort((a, b) => a.startTime.toMillis() - b.startTime.toMillis());
     
     setRescheduleCandidates(candidates);
-    setShowGapFiller(gap);
+    setShowGapFiller(expandedGap);
     setSelectedCandidates([]);
+    setGapWizardStep(1);
+    setGapPlacements({});
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const toggleCandidate = (id: string) => {
@@ -577,44 +604,216 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
         </div>
         {/* FINE INTESTAZIONE RESPONSIVE */}
 
-        {/* Selection Mode Header */}
+        {/* WIZARD: SELEZIONE E COLLOCAMENTO (MULTI-STEP) */}
         {showGapFiller && (
-          <div className="px-6 py-4 bg-emerald-50 border-b border-emerald-100 flex items-center justify-between animate-in slide-in-from-top duration-300">
-            <div className="flex flex-col">
-              <h4 className="text-sm font-bold text-emerald-900">Seleziona appuntamenti</h4>
-              <p className="text-[10px] text-emerald-700 opacity-70">
-                Stai riempiendo il buco delle {format(showGapFiller.start, 'HH:mm')}
-              </p>
+          <div className="bg-emerald-50 border-b border-emerald-200 p-4 sm:p-6 shadow-inner animate-in slide-in-from-top duration-300">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4">
+              <div>
+                <h4 className="text-lg font-bold text-emerald-900 flex items-center gap-2">
+                  <Clock size={20} /> Riempimento Buco
+                </h4>
+                <p className="text-sm text-emerald-700 font-medium">
+                  {format(showGapFiller.start, 'HH:mm')} - {format(showGapFiller.end, 'HH:mm')} 
+                  ({formatDurationText((showGapFiller.end.getTime() - showGapFiller.start.getTime()) / 60000)} liberi)
+                </p>
+              </div>
+              <div className="flex gap-2 w-full sm:w-auto">
+                {gapWizardStep !== 3 && (
+                  <button
+                    onClick={() => {
+                      setShowGapFiller(null);
+                      setSelectedCandidates([]);
+                      setGapPlacements({});
+                      setGapWizardStep(1);
+                    }}
+                    className="px-4 py-2 bg-white text-gray-500 hover:text-red-500 rounded-xl border border-gray-200 text-sm font-bold flex-1 sm:flex-none"
+                  >
+                    Annulla
+                  </button>
+                )}
+                
+                {gapWizardStep === 1 && (
+                  <button
+                    disabled={selectedCandidates.length === 0}
+                    onClick={() => {
+                      const initialPlacements: Record<string, Date> = {};
+                      selectedCandidates.forEach(id => { initialPlacements[id] = showGapFiller.start; });
+                      setGapPlacements(initialPlacements);
+                      setGapWizardStep(2);
+                    }}
+                    className="px-4 py-2 bg-emerald-600 text-white rounded-xl text-sm font-bold hover:bg-emerald-700 disabled:opacity-50 flex-1 sm:flex-none"
+                  >
+                    Avanti →
+                  </button>
+                )}
+
+                {gapWizardStep === 2 && (
+                  <button
+                    disabled={sendingProposal}
+                    onClick={handleProposeReschedule}
+                    className="px-4 py-2 bg-emerald-600 text-white rounded-xl text-sm font-bold hover:bg-emerald-700 disabled:opacity-50 flex-1 sm:flex-none flex items-center justify-center gap-2"
+                  >
+                    {sendingProposal ? 'Invio...' : <><Send size={16} /> Invia Proposte</>}
+                  </button>
+                )}
+
+                {gapWizardStep === 3 && (
+                  <button
+                    onClick={() => {
+                      setShowGapFiller(null);
+                      setSelectedCandidates([]);
+                      setGapPlacements({});
+                      setGapWizardStep(1);
+                    }}
+                    className="px-8 py-2 bg-black text-white rounded-xl text-sm font-bold hover:bg-gray-800 flex-1 sm:flex-none"
+                  >
+                    Fatto
+                  </button>
+                )}
+              </div>
             </div>
-            <div className="flex items-center gap-3">
-              <button
-                disabled={sendingProposal || selectedCandidates.length === 0}
-                onClick={() => handleProposeReschedule(showGapFiller)}
-                className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-xl text-xs font-bold hover:bg-emerald-700 transition-all disabled:opacity-50 shadow-lg shadow-emerald-200"
-              >
-                {sendingProposal ? 'Invio...' : 'Chiedi'} ({selectedCandidates.length})
-              </button>
-              <button
-                onClick={() => {
-                  setShowGapFiller(null);
-                  setSelectedCandidates([]);
-                  setRescheduleCandidates([]);
-                }}
-                className="p-2 bg-white text-gray-400 hover:text-red-500 rounded-xl border border-gray-100 transition-all"
-                title="Annulla selezione"
-              >
-                <ArrowLeft size={20} />
-              </button>
-            </div>
+
+            {/* STEP 2: Assegnazione Orari Manuale */}
+            {gapWizardStep === 2 && (
+              <div className="bg-white p-4 rounded-2xl border border-emerald-100 space-y-4">
+                <h5 className="text-sm font-bold text-gray-700 border-b pb-2">Seleziona l'orario esatto per ogni cliente</h5>
+                {selectedCandidates.map(id => {
+                  const candidate = rescheduleCandidates.find(c => c.id === id)!;
+                  const dur = (candidate.endTime.toDate().getTime() - candidate.startTime.toDate().getTime()) / 60000;
+                  
+                  // Genera opzioni orarie valide all'interno del buco
+                  const options = [];
+                  let curr = showGapFiller.start;
+                  while (addMinutes(curr, dur) <= showGapFiller.end) {
+                    options.push(new Date(curr));
+                    curr = addMinutes(curr, 15);
+                  }
+
+                  return (
+                    <div key={id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 bg-gray-50 rounded-xl">
+                      <div>
+                        <span className="font-bold block">{candidate.isForFriend ? candidate.friendDetails?.firstName : candidate.customer?.displayName}</span>
+                        <span className="text-xs text-gray-500">Servizio: {dur} min</span>
+                      </div>
+                      <select 
+                        className="p-2 rounded-lg border border-gray-200 font-bold outline-none focus:border-emerald-500"
+                        value={gapPlacements[id]?.toISOString() || showGapFiller.start.toISOString()}
+                        onChange={(e) => setGapPlacements(prev => ({...prev, [id]: new Date(e.target.value)}))}
+                      >
+                        {options.map(opt => (
+                          <option key={opt.toISOString()} value={opt.toISOString()}>{format(opt, 'HH:mm')}</option>
+                        ))}
+                      </select>
+                    </div>
+                  );
+                })}
+                <div className="text-[10px] text-emerald-600 flex items-center gap-1 mt-2">
+                  <AlertCircle size={12} /> Assicurati di non sovrapporre gli orari se hai scelto più clienti!
+                </div>
+              </div>
+            )}
+
+            {/* STEP 3: Notifiche WhatsApp Centralizzate tramite whatsapp.ts */}
+            {gapWizardStep === 3 && (
+              <div className="bg-white p-6 rounded-2xl border border-emerald-100 text-center space-y-6">
+                <div className="flex flex-col items-center justify-center gap-2">
+                  <div className="w-16 h-16 bg-emerald-50 text-emerald-600 rounded-full flex items-center justify-center mb-2">
+                    <CheckCircle2 size={32} />
+                  </div>
+                  <h5 className="text-xl font-bold text-gray-900">Proposte inviate nell'app!</h5>
+                  <p className="text-sm text-gray-500">Ora avvisa i clienti su WhatsApp per invitarli a controllare l'app.</p>
+                </div>
+                
+                <div className="space-y-3 text-left">
+                  {selectedCandidates.map(id => {
+                    const candidate = rescheduleCandidates.find(c => c.id === id)!;
+                    const phone = candidate.isForFriend ? candidate.friendDetails?.phone : candidate.customer?.phoneNumber;
+                    const name = candidate.isForFriend ? candidate.friendDetails?.firstName : candidate.customer?.displayName;
+                    const proposedTime = gapPlacements[id] || showGapFiller.start;
+                    
+                    // Sfruttiamo l'utility whatsapp.ts!
+                    const waLink = phone ? generateWhatsAppLink(
+                      'reschedule_proposal_sent', 
+                      name || 'Cliente', 
+                      phone, 
+                      format(proposedTime, 'dd/MM/yyyy'), 
+                      format(proposedTime, 'HH:mm')
+                    ) : null;
+
+                    return (
+                      <div key={id} className="flex items-center justify-between p-4 bg-gray-50 rounded-xl border border-gray-100">
+                        <div>
+                          <span className="font-bold text-sm block">{name}</span>
+                          <span className="text-xs text-gray-500">Proposto per le {format(proposedTime, 'HH:mm')}</span>
+                        </div>
+                        {waLink ? (
+                          <a 
+                            href={waLink}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="flex items-center gap-2 px-4 py-2 bg-[#25D366] text-white rounded-lg text-xs font-bold hover:bg-[#20bd5a] transition-all shadow-sm hover:shadow-md"
+                          >
+                            <MessageCircle size={16} /> WhatsApp
+                          </a>
+                        ) : (
+                          <span className="text-xs text-gray-400 italic">Numero mancante</span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
         <div className="divide-y divide-gray-50">
           {calendarData.items.map(item => {
-            const apps = getAppointmentsForItem(item);
+            // Nascondiamo gli annullati: ora diventeranno "Buchi" calcolati
+            const apps = getAppointmentsForItem(item).filter(a => a.status !== 'cancelled'); 
             const isBreak = calendarData.type === 'daily' && item.getHours() === 13;
             const isMatched = apps.length > 0 && searchTerm && apps.some(app => isMatchedBySearch(app));
             
+            // --- CALCOLO BUCHI ORARI (Intelligenza Artificiale - Tutte le Viste) ---
+            const gapsForThisItem: {start: Date, end: Date, duration: number}[] = [];
+            if (!isBreak) {
+              // Se vista giornaliera: marker su singola ora. Altrimenti: sull'intera giornata (08:00 - 20:00)
+              let currentMarker = calendarData.type === 'daily' ? item : setHours(startOfDay(item), 8);
+              const endOfSlot = calendarData.type === 'daily' ? addHours(item, 1) : setHours(startOfDay(item), 20);
+              const nowPlus30 = addMinutes(currentTime, 30); // Regola del Teletrasporto
+              
+              const sortedApps = [...apps].sort((a, b) => a.startTime.toMillis() - b.startTime.toMillis());
+              
+              sortedApps.forEach(app => {
+                const appStart = app.startTime.toDate();
+                if (isBefore(currentMarker, appStart) && isBefore(appStart, endOfSlot)) {
+                  const dur = (appStart.getTime() - currentMarker.getTime()) / 60000;
+                  // Creiamo il buco solo se è di almeno 15 min e si trova nel futuro
+                  if (dur >= 15 && isAfter(currentMarker, nowPlus30)) {
+                    gapsForThisItem.push({start: currentMarker, end: appStart, duration: dur});
+                  }
+                }
+                const appEnd = app.endTime.toDate();
+                if (isAfter(appEnd, currentMarker)) {
+                  currentMarker = isBefore(appEnd, endOfSlot) ? appEnd : endOfSlot;
+                }
+              });
+              
+              if (isBefore(currentMarker, endOfSlot)) {
+                 const dur = (endOfSlot.getTime() - currentMarker.getTime()) / 60000;
+                 if (dur >= 15 && isAfter(currentMarker, nowPlus30)) {
+                   gapsForThisItem.push({start: currentMarker, end: endOfSlot, duration: dur});
+                 }
+              }
+            }
+            
+            // Uniamo Appuntamenti e Buchi in ordine cronologico
+            const combinedItems = [
+              ...apps.map(a => ({ type: 'app' as const, data: a, start: a.startTime.toDate() })), 
+              ...gapsForThisItem.map(g => ({ type: 'gap' as const, data: g, start: g.start }))
+            ].sort((a,b) => a.start.getTime() - b.start.getTime());
+            // --------------------------------------------------------
+
             return (
               <div key={item.toISOString()} className={cn("flex min-h-[60px] relative", isBreak && "bg-gray-50/50")}>
                 {/* Past Time Overlay */}
@@ -625,18 +824,40 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
                 <div className="w-16 p-3 text-right border-r border-gray-50 flex-shrink-0">
                   <span className="text-xs font-bold text-gray-400">{calendarData.formatItem(item)}</span>
                 </div>
-                <div className="flex-1 p-1.5 flex gap-2 overflow-x-auto scrollbar-thin scrollbar-thumb-gray-200 scrollbar-track-transparent">
+                <div className="flex-1 p-1.5 flex gap-2 overflow-x-auto scrollbar-thin scrollbar-thumb-gray-200 scrollbar-track-transparent items-center">
                   {isBreak ? (
                     <div className="flex items-center justify-center w-full text-gray-300 text-[10px] font-bold uppercase tracking-widest italic">Pausa Pranzo</div>
-                  ) : apps.length === 0 ? (
+                  ) : combinedItems.length === 0 ? (
                     <div className="flex-1"></div>
                   ) : (
-                    apps.map(app => {
+                    combinedItems.map((itemObj, idx) => {
+                      // CASO A: Rendering del Bottone "Buco"
+                      if (itemObj.type === 'gap') {
+                        const gap = itemObj.data as {start: Date, end: Date, duration: number};
+                        const isMobile = typeof window !== 'undefined' && window.innerWidth < 640;
+                        const baseWidth = isMobile ? 7 : 10; 
+                        const cardWidth = (gap.duration / 30) * baseWidth;
+                        
+                        return (
+                          <button
+                            key={`gap-${idx}`}
+                            onClick={() => findCandidatesForGap({ start: gap.start, end: gap.end })}
+                            style={{ width: `${cardWidth}rem`, maxWidth: '85vw' }}
+                            className="flex-shrink-0 h-[60px] flex flex-col items-center justify-center gap-1 bg-amber-50 border-2 border-dashed border-amber-200 text-amber-600 rounded-xl hover:bg-amber-100 hover:border-amber-400 transition-all opacity-80 hover:opacity-100"
+                          >
+                            <Plus size={16} />
+                            <span className="text-[10px] font-bold leading-tight text-center">
+                              {formatDurationText(gap.duration)}
+                            </span>
+                          </button>
+                        );
+                      }
+
+                      // CASO B: Rendering dell'Appuntamento Normale
+                      const app = itemObj.data as Appointment & { customer?: UserProfile };
                       const duration = (app.endTime.toDate().getTime() - app.startTime.toDate().getTime()) / (1000 * 60);
                       
-                      // Calcoliamo una larghezza intelligente (Responsive)
                       const isMobile = typeof window !== 'undefined' && window.innerWidth < 640;
-                      // Usiamo 7 su smartphone e 10 su PC.
                       const baseWidth = isMobile ? 7 : 10; 
                       const cardWidth = (duration / 30) * baseWidth; 
                       
@@ -655,64 +876,39 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
                               setSelectedAppointment(app);
                             }
                           }}
-                          // Aggiungiamo maxWidth per sicurezza su schermi piccolissimi
                           style={{ width: `${cardWidth}rem`, maxWidth: '85vw' }}
                           className={cn(
-                            // p-2 su mobile, min-h ridotto per compattezza
                             "flex-shrink-0 p-2 sm:p-2.5 rounded-xl shadow-md flex flex-col justify-between text-left transition-all cursor-pointer relative min-h-[76px] sm:h-[88px] duration-500",
-                            app.id === highlightedAppId ? (app.status === 'cancelled' ? "ring-4 ring-red-500 shadow-[0_0_30px_rgba(239,68,68,0.7)] scale-[1.05] z-20 grayscale-0 opacity-100" : "ring-4 ring-emerald-500 shadow-[0_0_30px_rgba(16,185,129,0.6)] scale-[1.05] z-20") : "hover:scale-[1.02]",
+                            app.id === highlightedAppId ? "ring-4 ring-emerald-500 shadow-[0_0_30px_rgba(16,185,129,0.6)] scale-[1.05] z-20" : "hover:scale-[1.02]",
                             selectionMode && !isCandidate ? "bg-gray-100 text-gray-400 grayscale shadow-none border-gray-200" :
                             isSelected ? "bg-emerald-500 text-white ring-4 ring-emerald-500/30" :
                             (app.status === 'completed' || (app.status === 'booked' && isBefore(app.endTime.toDate(), currentTime))) ? "bg-emerald-600 text-white" :
-                            app.status === 'booked' ? "bg-black text-white" : 
-                            "bg-red-50 text-red-600 border border-red-100"
+                            "bg-black text-white" 
                           )}
                         >
                           <div>
-                            {/* Aggiunto gap-2, shrink-0 per gli orari e truncate al nome */}
                             <div className="flex justify-between items-start gap-2">
                               <div className="font-bold text-[11px] sm:text-xs truncate">
-                                {app.status === 'cancelled' ? 'ANNULLATO' : (app.isForFriend ? `Per: ${app.friendDetails?.firstName}` : app.customer?.displayName)}
+                                {app.isForFriend ? `Per: ${app.friendDetails?.firstName}` : app.customer?.displayName}
                               </div>
                               <div className="text-[9px] font-bold opacity-60 flex flex-col items-end leading-tight shrink-0">
                                 <span>{format(app.startTime.toDate(), 'HH:mm')}</span>
                                 <span>- {format(app.endTime?.toDate() || addMinutes(app.startTime.toDate(), app.services.reduce((acc, s) => acc + s.duration, 0)), 'HH:mm')}</span>
                               </div>
                             </div>
-                            {/* Troncato anche l'elenco servizi se è troppo lungo */}
                             <div className="text-[9px] opacity-70 mt-0.5 truncate">
                               {app.services.map(s => s.name).join(', ')}
                             </div>
                           </div>
                           <div className="flex justify-between items-center mt-1.5 pt-1.5 border-t border-white/10">
-                            {app.status !== 'cancelled' ? (
-                              <>
-                                <div className="flex items-center gap-1 text-[9px] truncate">
-                                  <Phone size={8} /> {app.isForFriend ? app.friendDetails?.phone?.slice(-10) : app.customer?.phoneNumber?.slice(-10)}
-                                </div>
-                                {app.isForFriend && (
-                                  <div className="text-[8px] bg-white/20 px-1 rounded uppercase font-bold">Amico</div>
-                                )}
-                              </>
-                            ) : (
-                              <button 
-                                disabled={isBefore(app.startTime.toDate(), currentTime) || selectionMode}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  findCandidatesForGap({ 
-                                    start: app.startTime.toDate(), 
-                                    end: app.endTime.toDate(),
-                                    appointmentId: app.id!
-                                  });
-                                }}
-                                className="w-full py-1 bg-red-600 text-white rounded-lg text-[8px] font-bold uppercase flex items-center justify-center gap-1 hover:bg-red-700 disabled:opacity-30 disabled:grayscale"
-                              >
-                                <ArrowUpCircle size={10} /> {isBefore(app.startTime.toDate(), currentTime) ? 'Scaduto' : 'Proponi Cambio'}
-                              </button>
+                            <div className="flex items-center gap-1 text-[9px] truncate">
+                              <Phone size={8} /> {app.isForFriend ? app.friendDetails?.phone?.slice(-10) : app.customer?.phoneNumber?.slice(-10)}
+                            </div>
+                            {app.isForFriend && (
+                              <div className="text-[8px] bg-white/20 px-1 rounded uppercase font-bold">Amico</div>
                             )}
                           </div>
 
-                          {/* Selection Checkmark */}
                           {isSelected && (
                             <div className="absolute bottom-1 right-1 bg-white text-emerald-600 rounded-full p-0.5 shadow-sm animate-in zoom-in">
                               <Check size={10} strokeWidth={4} />
