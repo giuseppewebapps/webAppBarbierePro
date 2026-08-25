@@ -111,10 +111,20 @@ export default function App() {
   }, [user]);
 
   // Controlla se l'utente è loggato ma non ha il numero di telefono salvato
-  useEffect(() => {
+ useEffect(() => {
     if (user && profile) {
-      const phone = profile.phoneNumber ? String(profile.phoneNumber).trim() : '';
-      if (!phone || phone.length < 8) {
+      // 🚀 FIX: Estrazione sicura che previene il bug "undefined" come stringa
+      const phone = typeof profile.phoneNumber === 'string' ? profile.phoneNumber.trim() : '';
+      
+      // Controllo per i numeri fittizi/di test
+      const isDummyNumber = phone === '+390000000000' || phone === '+390000000001';
+
+      // Mostra la modale se:
+      // 1. Il campo non c'è o è vuoto (!phone)
+      // 2. È letteralmente salvato come "undefined" o "null"
+      // 3. È troppo corto (< 8)
+      // 4. È uno dei numeri fittizi
+      if (!phone || phone === 'undefined' || phone === 'null' || phone.length < 8 || isDummyNumber) {
         setShowMandatoryPhoneModal(true);
       } else {
         setShowMandatoryPhoneModal(false);
