@@ -129,6 +129,7 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
   const [isScheduleMaintenanceOpen, setIsScheduleMaintenanceOpen] = useState(false);
   const [viewMode, setViewMode] = useState<'daily' | 'weekly' | 'monthly'>('daily');
   const [searchTerm, setSearchTerm] = useState('');
+  const [searchType, setSearchType] = useState<'name' | 'phone'>('name');
   const [highlightedAppId, setHighlightedAppId] = useState<string | null>(null);
   const [isSearchActive, setIsSearchActive] = useState(false);
   const [declinedProposalNotif, setDeclinedProposalNotif] = useState<any>(null);
@@ -363,13 +364,26 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
     }
   };
 
+  const isMatchedBySearch = (app: Appointment & { customer?: UserProfile }) => {
+    if (!searchTerm) return false;
+    const searchLower = searchTerm.toLowerCase().trim();
+
+    if (searchType === 'name') {
+      const customerName = app.customer?.displayName?.toLowerCase() || '';
+      const friendName = app.friendDetails ? 
+        `${app.friendDetails.firstName} ${app.friendDetails.lastName}`.toLowerCase() : '';
+      return customerName.includes(searchLower) || friendName.includes(searchLower);
+    } else {
+      const customerPhone = app.customer?.phoneNumber || '';
+      const friendPhone = app.friendDetails?.phone || '';
+      const normSearch = searchLower.replace(/\D/g, '');
+      return customerPhone.includes(normSearch) || friendPhone.includes(normSearch);
+    }
+  };
+
   const filteredAppointments = appointments.filter(app => {
     if (!searchTerm) return true;
-    const searchLower = searchTerm.toLowerCase();
-    const customerName = app.customer?.displayName?.toLowerCase() || '';
-    const friendName = app.friendDetails ? 
-      `${app.friendDetails.firstName} ${app.friendDetails.lastName}`.toLowerCase() : '';
-    return customerName.includes(searchLower) || friendName.includes(searchLower);
+    return isMatchedBySearch(app);
   });
 
   const getCalendarData = () => {
@@ -458,15 +472,6 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
 
       return false;
     });
-  };
-
-  const isMatchedBySearch = (app: Appointment & { customer?: UserProfile }) => {
-    if (!searchTerm) return false;
-    const searchLower = searchTerm.toLowerCase();
-    const customerName = app.customer?.displayName?.toLowerCase() || '';
-    const friendName = app.friendDetails ? 
-      `${app.friendDetails.firstName} ${app.friendDetails.lastName}`.toLowerCase() : '';
-    return customerName.includes(searchLower) || friendName.includes(searchLower);
   };
 
   const formatDurationText = (totalMinutes: number) => {
@@ -583,9 +588,30 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
           
           <div className="flex items-center justify-between w-full xl:w-auto gap-2 sm:gap-4">
             <button onClick={() => setSelectedDate(subDays(selectedDate, 1))} className="p-2 hover:bg-gray-50 rounded-full"><ChevronLeft size={20} /></button>
-            <h3 className="text-lg sm:text-xl font-bold min-w-[150px] sm:min-w-[200px] text-center">
-              {format(selectedDate, 'EEEE d MMMM', { locale: it })}
-            </h3>
+            
+            <div className="flex items-center justify-center gap-1 sm:gap-2">
+              <h3 className="text-lg sm:text-xl font-bold min-w-[150px] sm:min-w-[180px] text-center">
+                {format(selectedDate, 'EEEE d MMMM', { locale: it })}
+              </h3>
+              
+              <div className="relative flex items-center justify-center cursor-pointer">
+                <button className="p-2 hover:bg-gray-100 rounded-full text-gray-500 hover:text-black transition-colors focus:outline-none">
+                  <CalendarIcon size={20} />
+                </button>
+                <input
+                  type="date"
+                  value={format(selectedDate, 'yyyy-MM-dd')}
+                  onChange={(e) => {
+                    if (e.target.value) {
+                      setSelectedDate(new Date(e.target.value));
+                    }
+                  }}
+                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                  title="Seleziona una data"
+                />
+              </div>
+            </div>
+
             <button onClick={() => setSelectedDate(addDays(selectedDate, 1))} className="p-2 hover:bg-gray-50 rounded-full"><ChevronRight size={20} /></button>
           </div>
 
@@ -612,16 +638,27 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
               </button>
             </div>
             
-            <div className="relative flex-1 min-w-[130px] max-w-[200px]">
-              <input
-                type="text"
-                placeholder="Cerca cliente..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                onFocus={() => setIsSearchActive(true)}
-                className={cn("pl-8 pr-3 py-2 w-full text-xs sm:text-sm rounded-xl border transition-all outline-none", isSearchActive ? "border-black ring-2 ring-black/20" : "border-gray-200 hover:border-gray-300")}
-              />
-              <Search size={16} className={cn("absolute left-2.5 top-1/2 -translate-y-1/2 transition-colors", isSearchActive ? "text-black" : "text-gray-400")} />
+            <div className="relative flex-1 min-w-[220px] max-w-[320px] flex shadow-sm rounded-xl">
+              <select
+                value={searchType}
+                onChange={(e) => setSearchType(e.target.value as 'name' | 'phone')}
+                className="bg-gray-50 border-y border-l border-gray-200 text-xs sm:text-sm rounded-l-xl px-2 py-2 outline-none focus:border-black font-medium text-gray-600 cursor-pointer"
+              >
+                <option value="name">Nome</option>
+                <option value="phone">Numero</option>
+              </select>
+              <div className="relative flex-1">
+                <input
+                  type="text"
+                  placeholder={searchType === 'name' ? "Cerca nome..." : "Cerca numero..."}
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  onFocus={() => setIsSearchActive(true)}
+                  onBlur={() => setIsSearchActive(false)}
+                  className={cn("pl-8 pr-3 py-2 w-full text-xs sm:text-sm rounded-r-xl border transition-all outline-none", isSearchActive ? "border-black ring-1 ring-black" : "border-gray-200 hover:border-gray-300")}
+                />
+                <Search size={16} className={cn("absolute left-2.5 top-1/2 -translate-y-1/2 transition-colors", isSearchActive ? "text-black" : "text-gray-400")} />
+              </div>
             </div>
             
             <div className="flex items-center gap-2 sm:gap-3">
