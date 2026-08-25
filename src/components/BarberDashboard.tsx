@@ -16,7 +16,7 @@ import {
   limit
 } from 'firebase/firestore';
 import { db, auth } from '../firebase';
-import { Appointment, UserProfile, Notification as AppNotification } from '../types';
+import { Appointment, UserProfile, RescheduleProposal, TimeRange, Notification as AppNotification } from '../types';
 import { 
   format, 
   startOfDay, 
@@ -70,7 +70,7 @@ import {
   SALON_INFO 
 } from '../constants';
 import { cn } from '../lib/utils';
-import { RescheduleProposal } from '../types';
+import { SpecialDay } from '../types';
 import ScheduleMaintenanceModal from './ScheduleMaintenanceModal';
 
 enum OperationType {
@@ -100,7 +100,7 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
         photoUrl: provider.photoURL
       })) || []
     }
-  }
+  };
   console.error('Firestore Error: ', JSON.stringify(errInfo));
   throw new Error(JSON.stringify(errInfo));
 }
@@ -133,6 +133,40 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
   const [isSearchActive, setIsSearchActive] = useState(false);
   const [declinedProposalNotif, setDeclinedProposalNotif] = useState<any>(null);
   const [isReminderModalOpen, setIsReminderModalOpen] = useState(false);
+  const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
+
+  // STATO IMPOSTAZIONI ORARI DINAMICHE
+  const [businessSettings, setBusinessSettings] = useState<{
+    openingHours: TimeRange[];
+    closedDays: number[];
+  }>({
+    openingHours: DEFAULT_OPENING_HOURS,
+    closedDays: DEFAULT_CLOSED_DAYS
+  });
+
+  // ASCOLTA LE IMPOSTAZIONI STANDARD DA FIRESTORE
+  useEffect(() => {
+    const unsubscribe = onSnapshot(doc(db, 'settings', 'business_hours'), (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        setBusinessSettings({
+          openingHours: data.openingHours || DEFAULT_OPENING_HOURS,
+          closedDays: data.closedDays || DEFAULT_CLOSED_DAYS
+        });
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Ascolta le eccezioni del calendario
+  useEffect(() => {
+    const q = query(collection(db, 'calendar_exceptions'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as SpecialDay[];
+      setSpecialDays(docs);
+    });
+    return () => unsubscribe();
+  }, []);
 
   useEffect(() => {
     const handleOpenManualBooking = () => setIsManualBookingOpen(true);
@@ -146,6 +180,7 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
       window.removeEventListener('open-schedule-maintenance', handleOpenScheduleMaintenance);
     };
   }, []);
+
   const [sendingProposal, setSendingProposal] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
 
@@ -154,7 +189,7 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
     return () => clearInterval(timer);
   }, []);
 
-  // Logica di Avanzamento Coda Proposte Reschedule Scadute (Solo per il Barbiere/Admin)
+  // Avanzamento Coda Proposte Reschedule Scadute
   useEffect(() => {
     if (!profile || profile.role !== 'barber') return;
 
@@ -166,7 +201,6 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
         for (const docSnap of snapshot.docs) {
           const proposal = { id: docSnap.id, ...docSnap.data() } as RescheduleProposal;
           
-          // ELIMINA se l'orario di inizio è passato
           if (isAfter(currentTime, proposal.gapStartTime.toDate())) {
             await deleteDoc(doc(db, 'rescheduleProposals', proposal.id!));
             const notifQ = query(collection(db, 'notifications'), where('proposalId', '==', proposal.id));
@@ -267,23 +301,15 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
     return () => unsubscribe();
   }, []);
 
-// AGGIUNTA: Ascolta il click dalla notifica e apre il popup del Barbiere
   useEffect(() => {
     if (selectedAppointmentId && appointments.length > 0) {
       const foundApp = appointments.find(a => a.id === selectedAppointmentId);
       if (foundApp) {
-        // 1. Sposta magicamente il calendario al giorno dell'appuntamento
         setSelectedDate(foundApp.startTime.toDate());
-        
         setActiveNotifType(selectedNotificationType || null);
-
-        // 2. Apre il popup di dettaglio
         setSelectedAppointment(foundApp);
-
-        // 3. Imposta l'appuntamento da illuminare
         setHighlightedAppId(selectedAppointmentId);
 
-        // 4. Aspettiamo mezzo secondo per il render, poi scorriamo (in Orizzontale!)
         setTimeout(() => {
           const element = document.getElementById(`appointment-${selectedAppointmentId}`);
           if (element) {
@@ -291,18 +317,15 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
           }
         }, 500);
 
-        // 5. Spegniamo il bagliore dopo 5 secondi
         setTimeout(() => {
           setHighlightedAppId(null);
         }, 5000);
         
-        // 6. Avvisa App.tsx di resettare l'ID
         if (onAppointmentDialogClose) onAppointmentDialogClose();
       }
     }
   }, [selectedAppointmentId, appointments, onAppointmentDialogClose, selectedNotificationType]);
 
-  // Ascolta le notifiche speciali di rifiuto
   useEffect(() => {
     const handleSpecialNotif = (e: any) => {
       const notif = e.detail;
@@ -324,7 +347,6 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
         cancelledBy: 'barber'
       });
 
-      // Notify Customer (only if it's not the barber themselves)
       if (app.customerId !== profile?.uid) {
         await addDoc(collection(db, 'notifications'), {
           userId: app.customerId,
@@ -341,7 +363,6 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
     }
   };
 
-  // Filtra gli appuntamenti in base al termine di ricerca
   const filteredAppointments = appointments.filter(app => {
     if (!searchTerm) return true;
     const searchLower = searchTerm.toLowerCase();
@@ -351,19 +372,43 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
     return customerName.includes(searchLower) || friendName.includes(searchLower);
   });
 
-  // Ottieni le ore o i giorni in base alla visualizzazione selezionata
   const getCalendarData = () => {
     switch (viewMode) {
-      case 'daily':
+      case 'daily': {
+        const dateString = format(selectedDate, 'yyyy-MM-dd');
+        const exceptionForToday = specialDays.find(ex => ex.date === dateString);
+        const activeOpeningHours = exceptionForToday?.openingHours || businessSettings.openingHours;
+
+        // Se il giorno è chiuso, mostriamo l'intervallo di default (08:00 - 20:00)
+        if (exceptionForToday?.isClosed || (!exceptionForToday && businessSettings.closedDays.includes(getDay(selectedDate))) || activeOpeningHours.length === 0) {
+          return {
+            type: 'daily' as const,
+            items: eachHourOfInterval({
+              start: setHours(startOfDay(selectedDate), 8),
+              end: setHours(startOfDay(selectedDate), 20)
+            }),
+            formatItem: (item: Date) => format(item, 'HH:00')
+          };
+        }
+
+        // Troviamo l'ora intera di inizio (floor) e di fine (ceil/round) per mantenere le etichette pulite (es. 07:00, 08:00)
+        const minStart = Math.min(...activeOpeningHours.map(h => h.start));
+        const maxEnd = Math.max(...activeOpeningHours.map(h => h.end));
+
+        const startH = Math.floor(minStart);
+        const endH = Math.ceil(maxEnd);
+
         return {
           type: 'daily' as const,
           items: eachHourOfInterval({
-            start: setHours(startOfDay(selectedDate), 8),
-            end: setHours(startOfDay(selectedDate), 20)
+            start: setHours(startOfDay(selectedDate), startH),
+            end: setHours(startOfDay(selectedDate), endH)
           }),
           formatItem: (item: Date) => format(item, 'HH:00')
         };
-      case 'weekly':
+      }
+
+      case 'weekly': {
         const weekStart = startOfWeek(selectedDate);
         const weekEnd = endOfWeek(selectedDate);
         return {
@@ -371,7 +416,9 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
           items: eachDayOfInterval({ start: weekStart, end: weekEnd }),
           formatItem: (item: Date) => format(item, 'EEE d', { locale: it })
         };
-      case 'monthly':
+      }
+
+      case 'monthly': {
         const monthStart = startOfDay(selectedDate);
         const monthEnd = endOfDay(addDays(startOfDay(new Date(selectedDate.getFullYear(), selectedDate.getMonth() + 1, 0)), 0));
         return {
@@ -379,6 +426,8 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
           items: eachDayOfInterval({ start: monthStart, end: monthEnd }),
           formatItem: (item: Date) => format(item, 'd', { locale: it })
         };
+      }
+
       default:
         return {
           type: 'daily' as const,
@@ -404,15 +453,9 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
         if (!isSameDay(start, item)) return false;
       }
 
-      // Lasciamo:
-      //1. Quelli "da fare" (booked)
-      //2. Quelli completati (completed) - come richiesto, restano a video verdi
-      //3. Quelli con "possibilità di cambio" (cancelled non ancora passati)
-
       if (app.status === 'booked' || app.status === 'completed') return true;
       if (app.status === 'cancelled' && !isPast) return true;
 
-      // Gli appuntamenti "scaduti" (cancelled passati) e quelli già "completati" vengono rimossi
       return false;
     });
   };
@@ -426,7 +469,6 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
     return customerName.includes(searchLower) || friendName.includes(searchLower);
   };
 
-  // Formattazione intelligente per i buchi orari
   const formatDurationText = (totalMinutes: number) => {
     if (totalMinutes < 60) return `${totalMinutes} min`;
     const hours = Math.floor(totalMinutes / 60);
@@ -441,7 +483,6 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
     try {
       const targets = selectedCandidates.map((id, idx) => {
         const candidate = rescheduleCandidates.find(c => c.id === id)!;
-        // Legge l'orario specifico posizionato manualmente, altrimenti defaulta all'inizio
         const specificTime = gapPlacements[id] || showGapFiller.start; 
         return {
           userId: candidate.customerId,
@@ -449,7 +490,7 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
           status: idx === 0 ? 'pending' : 'waiting' as any,
           notifiedAt: idx === 0 ? Timestamp.now() : null,
           expiresAt: idx === 0 ? Timestamp.fromDate(addMinutes(new Date(), 15)) : null,
-          proposedStartTime: Timestamp.fromDate(specificTime) // IL DATO NUOVO!
+          proposedStartTime: Timestamp.fromDate(specificTime)
         };
       });
 
@@ -479,7 +520,6 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
         appointmentId: selectedCandidates[0]
       });
 
-      // Invece di chiudere brutalmente, passiamo allo Step 3 per inviare i WhatsApp
       setGapWizardStep(3);
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'rescheduleProposals');
@@ -489,12 +529,11 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
   };
 
   const findCandidatesForGap = (clickedGap: { start: Date, end: Date, appointmentId?: string }) => {
-    // 1. Espansione Intelligente: Guardiamo in avanti per trovare la VERA fine del buco
     const dayApps = appointments
       .filter(a => isSameDay(a.startTime.toDate(), clickedGap.start) && a.status === 'booked')
       .sort((a, b) => a.startTime.toMillis() - b.startTime.toMillis());
     
-    let trueEnd = setHours(startOfDay(clickedGap.start), 20); // Default chiusura
+    let trueEnd = setHours(startOfDay(clickedGap.start), 20);
     const nextApp = dayApps.find(a => isAfter(a.startTime.toDate(), clickedGap.start) || a.startTime.toDate().getTime() === clickedGap.start.getTime());
     
     if (nextApp) { trueEnd = nextApp.startTime.toDate(); }
@@ -502,14 +541,13 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
     const expandedGap = { ...clickedGap, end: trueEnd };
     const gapDuration = (trueEnd.getTime() - clickedGap.start.getTime()) / (1000 * 60);
 
-    // 2. Cerca i candidati che "entrano" nel VERO buco
     const candidates = appointments.filter(app => {
       const appStart = app.startTime.toDate();
       const appDuration = (app.endTime.toDate().getTime() - app.startTime.toDate().getTime()) / (1000 * 60);
       
       return app.status === 'booked' && 
-             isAfter(appStart, addMinutes(currentTime, 30)) && //(Buffer 30 min)
-             appDuration <= gapDuration && // Deve essere MINORE o UGUALE al buco
+             isAfter(appStart, addMinutes(currentTime, 30)) && 
+             appDuration <= gapDuration && 
              app.id !== expandedGap.appointmentId;
     }).sort((a, b) => a.startTime.toMillis() - b.startTime.toMillis());
     
@@ -527,18 +565,15 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
     );
   };
 
-// --- CALCOLO CLIENTI DI DOMANI ---
   const tomorrow = addDays(new Date(), 1);
   const tomorrowsAppointments = appointments.filter(app => 
     isSameDay(app.startTime.toDate(), tomorrow) && app.status === 'booked'
   ).sort((a, b) => a.startTime.toMillis() - b.startTime.toMillis());
-  // ---------------------------------
 
   if (loading) {
     return <div className="text-center py-12">Caricamento dashboard...</div>;
   }
 
-// qui per cambiare la gestione account barbiere
   return (
     <div className="space-y-8 max-w-4xl mx-auto pb-12 px-4 sm:px-0">
       <div className="bg-white/80 backdrop-blur-md border border-white/20 rounded-3xl overflow-hidden shadow-2xl">
@@ -546,7 +581,6 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
         {/* INTESTAZIONE RESPONSIVE */}
         <div className="p-4 sm:p-6 border-b border-gray-100/50 flex flex-col xl:flex-row items-center justify-between gap-4 sm:gap-6">
           
-          {/* Parte Sinistra: Selettore Data */}
           <div className="flex items-center justify-between w-full xl:w-auto gap-2 sm:gap-4">
             <button onClick={() => setSelectedDate(subDays(selectedDate, 1))} className="p-2 hover:bg-gray-50 rounded-full"><ChevronLeft size={20} /></button>
             <h3 className="text-lg sm:text-xl font-bold min-w-[150px] sm:min-w-[200px] text-center">
@@ -555,10 +589,8 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
             <button onClick={() => setSelectedDate(addDays(selectedDate, 1))} className="p-2 hover:bg-gray-50 rounded-full"><ChevronRight size={20} /></button>
           </div>
 
-          {/* Parte Destra: Controlli e Bottoni */}
           <div className="flex flex-wrap items-center justify-center xl:justify-end gap-3 sm:gap-4 w-full xl:w-auto">
             
-            {/* Tasti Visualizzazione */}
             <div className="flex items-center gap-1 sm:gap-2 bg-gray-100 rounded-xl px-2 py-1.5 sm:px-3 sm:py-2">
               <button
                 onClick={() => setViewMode('daily')}
@@ -580,7 +612,6 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
               </button>
             </div>
             
-            {/* Ricerca */}
             <div className="relative flex-1 min-w-[130px] max-w-[200px]">
               <input
                 type="text"
@@ -593,7 +624,6 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
               <Search size={16} className={cn("absolute left-2.5 top-1/2 -translate-y-1/2 transition-colors", isSearchActive ? "text-black" : "text-gray-400")} />
             </div>
             
-            {/* Bottoni Oggi & Promemoria */}
             <div className="flex items-center gap-2 sm:gap-3">
               <button onClick={() => setSelectedDate(new Date())} className="text-xs sm:text-sm font-bold text-gray-400 hover:text-black">Oggi</button>
               
@@ -609,7 +639,6 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
 
           </div>
         </div>
-        {/* FINE INTESTAZIONE RESPONSIVE */}
 
         {/* WIZARD: SELEZIONE E COLLOCAMENTO (MULTI-STEP) */}
         {showGapFiller && (
@@ -688,7 +717,6 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
                   const candidate = rescheduleCandidates.find(c => c.id === id)!;
                   const dur = (candidate.endTime.toDate().getTime() - candidate.startTime.toDate().getTime()) / 60000;
                   
-                  // Genera opzioni orarie valide all'interno del buco
                   const options = [];
                   let curr = showGapFiller.start;
                   while (addMinutes(curr, dur) <= showGapFiller.end) {
@@ -720,7 +748,7 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
               </div>
             )}
 
-            {/* STEP 3: Notifiche WhatsApp Centralizzate tramite whatsapp.ts */}
+            {/* STEP 3: Notifiche WhatsApp Centralizzate */}
             {gapWizardStep === 3 && (
               <div className="bg-white p-6 rounded-2xl border border-emerald-100 text-center space-y-6">
                 <div className="flex flex-col items-center justify-center gap-2">
@@ -738,7 +766,6 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
                     const name = candidate.isForFriend ? candidate.friendDetails?.firstName : candidate.customer?.displayName;
                     const proposedTime = gapPlacements[id] || showGapFiller.start;
                     
-                    // Sfruttiamo l'utility whatsapp.ts!
                     const waLink = phone ? generateWhatsAppLink(
                       'reschedule_proposal_sent', 
                       name || 'Cliente', 
@@ -776,50 +803,130 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
 
         <div className="divide-y divide-gray-50">
           {calendarData.items.map(item => {
-            // Nascondiamo gli annullati: ora diventeranno "Buchi" calcolati
             const apps = getAppointmentsForItem(item).filter(a => a.status !== 'cancelled'); 
-            const isBreak = calendarData.type === 'daily' && item.getHours() === 13;
-            const isMatched = apps.length > 0 && searchTerm && apps.some(app => isMatchedBySearch(app));
             
-            // --- CALCOLO BUCHI ORARI (Intelligenza Artificiale - Tutte le Viste) ---
-            const gapsForThisItem: {start: Date, end: Date, duration: number}[] = [];
-            if (!isBreak && !searchTerm) {
-              // Se vista giornaliera: marker su singola ora. Altrimenti: sull'intera giornata (08:00 - 20:00)
-              let currentMarker = calendarData.type === 'daily' ? item : setHours(startOfDay(item), 8);
-              const endOfSlot = calendarData.type === 'daily' ? addHours(item, 1) : setHours(startOfDay(item), 20);
-              const nowPlus30 = addMinutes(currentTime, 30); // Regola del Teletrasporto
-              
-              const sortedApps = [...apps].sort((a, b) => a.startTime.toMillis() - b.startTime.toMillis());
-              
-              sortedApps.forEach(app => {
-                const appStart = app.startTime.toDate();
-                if (isBefore(currentMarker, appStart) && isBefore(appStart, endOfSlot)) {
-                  const dur = (appStart.getTime() - currentMarker.getTime()) / 60000;
-                  // Creiamo il buco solo se è di almeno 15 min e si trova nel futuro
-                  if (dur >= 15 && isAfter(currentMarker, nowPlus30)) {
-                    gapsForThisItem.push({start: currentMarker, end: appStart, duration: dur});
-                  }
+            // --- CALCOLO TURNI E OVERLAY "FUORI TURNO" (Corretto per orari frazionati) ---
+            let isBreak = false;
+            let offRange: { start: Date, end: Date, label: string } | null = null;
+
+            if (calendarData.type === 'daily') {
+              const dateString = format(selectedDate, 'yyyy-MM-dd');
+              const exceptionForToday = specialDays.find(ex => ex.date === dateString);
+              const activeOpeningHours = exceptionForToday?.openingHours || businessSettings.openingHours;
+
+              const itemStart = item;
+              const itemEnd = addHours(item, 1);
+
+              // 1. Controllo minuti frazionati "Fuori Turno" (Aperture / Chiusure a metà ora)
+              activeOpeningHours.forEach(range => {
+                const sH = Math.floor(range.start);
+                const sM = Math.round((range.start - sH) * 60);
+                const eH = Math.floor(range.end);
+                const eM = Math.round((range.end - eH) * 60);
+
+                const shiftStart = setMinutes(setHours(startOfDay(selectedDate), sH), sM);
+                const shiftEnd = setMinutes(setHours(startOfDay(selectedDate), eH), eM);
+
+                // CASO A: Apertura frazionata (es. Apertura ore 08:45 nella riga delle 08:00)
+                if (isBefore(itemStart, shiftStart) && isBefore(shiftStart, itemEnd)) {
+                  offRange = {
+                    start: itemStart,
+                    end: shiftStart,
+                    label: `Apertura ore ${format(shiftStart, 'HH:mm')}`
+                  };
                 }
-                const appEnd = app.endTime.toDate();
-                if (isAfter(appEnd, currentMarker)) {
-                  currentMarker = isBefore(appEnd, endOfSlot) ? appEnd : endOfSlot;
+                // CASO B: Chiusura frazionata (es. Apertura fino alle ore 13:15 nella riga delle 13:00 o 20:30 nella riga delle 20:00)
+                else if (isBefore(itemStart, shiftEnd) && isBefore(shiftEnd, itemEnd)) {
+                  offRange = {
+                    start: shiftEnd,
+                    end: itemEnd,
+                    label: `Apertura fino alle ore ${format(shiftEnd, 'HH:mm')}`
+                  };
                 }
               });
-              
-              if (isBefore(currentMarker, endOfSlot)) {
-                 const dur = (endOfSlot.getTime() - currentMarker.getTime()) / 60000;
-                 if (dur >= 15 && isAfter(currentMarker, nowPlus30)) {
-                   gapsForThisItem.push({start: currentMarker, end: endOfSlot, duration: dur});
-                 }
+
+              // 2. Controllo Pausa Salone Totale (Solamente se l'ora è COMPLETAMENTE fuori dai turni)
+              if (!offRange && activeOpeningHours.length > 1) {
+                const shift1EndH = Math.floor(activeOpeningHours[0].end);
+                const shift2StartH = Math.floor(activeOpeningHours[1].start);
+                const itemH = item.getHours();
+
+                if (itemH >= shift1EndH && itemH < shift2StartH) {
+                  isBreak = true;
+                }
               }
             }
+
+            const isMatched = apps.length > 0 && searchTerm && apps.some(app => isMatchedBySearch(app));
+
+            // --- CALCOLO BUCHI ORARI (Intelligente e Vincolato ai Turni) ---
+            const gapsForThisItem: { start: Date, end: Date, duration: number }[] = [];
             
-            // Uniamo Appuntamenti e Buchi in ordine cronologico
+            if (!isBreak && !searchTerm && calendarData.type === 'daily') {
+              const dateString = format(selectedDate, 'yyyy-MM-dd');
+              const exceptionForToday = specialDays.find(ex => ex.date === dateString);
+              const activeOpeningHours = exceptionForToday?.openingHours || businessSettings.openingHours;
+
+              const itemStart = item;
+              const itemEnd = addHours(item, 1);
+              const nowPlus30 = addMinutes(currentTime, 30);
+
+              // Troviamo il turno attivo per questo slot
+              const currentShift = activeOpeningHours.find(range => {
+                const sH = Math.floor(range.start);
+                const sM = Math.round((range.start - sH) * 60);
+                const eH = Math.floor(range.end);
+                const eM = Math.round((range.end - eH) * 60);
+
+                const shiftStart = setMinutes(setHours(startOfDay(selectedDate), sH), sM);
+                const shiftEnd = setMinutes(setHours(startOfDay(selectedDate), eH), eM);
+
+                return isBefore(itemStart, shiftEnd) && isAfter(itemEnd, shiftStart);
+              });
+
+              if (currentShift) {
+                const sH = Math.floor(currentShift.start);
+                const sM = Math.round((currentShift.start - sH) * 60);
+                const shiftStart = setMinutes(setHours(startOfDay(selectedDate), sH), sM);
+
+                const eH = Math.floor(currentShift.end);
+                const eM = Math.round((currentShift.end - eH) * 60);
+                const shiftEnd = setMinutes(setHours(startOfDay(selectedDate), eH), eM);
+
+                // Il marker iniziale viene "spinto" avanti se l'ora inizia prima dell'apertura (es. da 15:00 spinto a 15:45)
+                let currentMarker = isBefore(itemStart, shiftStart) ? shiftStart : itemStart;
+                const realSlotEnd = isAfter(itemEnd, shiftEnd) ? shiftEnd : itemEnd;
+
+                const sortedApps = [...apps].sort((a, b) => a.startTime.toMillis() - b.startTime.toMillis());
+
+                sortedApps.forEach(app => {
+                  const appStart = app.startTime.toDate();
+                  if (isBefore(currentMarker, appStart) && isBefore(appStart, realSlotEnd)) {
+                    const dur = (appStart.getTime() - currentMarker.getTime()) / 60000;
+                    if (dur >= 15 && isAfter(currentMarker, nowPlus30)) {
+                      gapsForThisItem.push({ start: currentMarker, end: appStart, duration: dur });
+                    }
+                  }
+                  const appEnd = app.endTime.toDate();
+                  if (isAfter(appEnd, currentMarker)) {
+                    currentMarker = isBefore(appEnd, realSlotEnd) ? appEnd : realSlotEnd;
+                  }
+                });
+
+                if (isBefore(currentMarker, realSlotEnd)) {
+                  const dur = (realSlotEnd.getTime() - currentMarker.getTime()) / 60000;
+                  if (dur >= 15 && isAfter(currentMarker, nowPlus30)) {
+                    gapsForThisItem.push({ start: currentMarker, end: realSlotEnd, duration: dur });
+                  }
+                }
+              }
+            }
+
+            // Uniamo Elementi e Buchi
             const combinedItems = [
               ...apps.map(a => ({ type: 'app' as const, data: a, start: a.startTime.toDate() })), 
               ...gapsForThisItem.map(g => ({ type: 'gap' as const, data: g, start: g.start }))
-            ].sort((a,b) => a.start.getTime() - b.start.getTime());
-            // --------------------------------------------------------
+            ].sort((a, b) => a.start.getTime() - b.start.getTime());
 
             return (
               <div key={item.toISOString()} className={cn("flex min-h-[60px] relative", isBreak && "bg-gray-50/50")}>
@@ -832,98 +939,135 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
                   <span className="text-xs font-bold text-gray-400">{calendarData.formatItem(item)}</span>
                 </div>
                 <div className="flex-1 p-1.5 flex gap-2 overflow-x-auto scrollbar-thin scrollbar-thumb-gray-200 scrollbar-track-transparent items-center">
+                  
+                  {/* CASO 1: Pausa Salone Completa */}
                   {isBreak ? (
-                    <div className="flex items-center justify-center w-full text-gray-300 text-[10px] font-bold uppercase tracking-widest italic">Pausa Pranzo</div>
-                  ) : combinedItems.length === 0 ? (
-                    <div className="flex-1"></div>
+                    <div className="flex items-center justify-center w-full text-gray-300 text-[10px] font-bold uppercase tracking-widest italic">
+                      Pausa Salone
+                    </div>
                   ) : (
-                    combinedItems.map((itemObj, idx) => {
-                      // CASO A: Rendering del Bottone "Buco"
-                      if (itemObj.type === 'gap') {
-                        const gap = itemObj.data as {start: Date, end: Date, duration: number};
-                        const isMobile = typeof window !== 'undefined' && window.innerWidth < 640;
-                        const baseWidth = isMobile ? 7 : 10; 
-                        const cardWidth = (gap.duration / 30) * baseWidth;
-                        
-                        return (
-                          <button
-                            key={`gap-${idx}`}
-                            onClick={() => findCandidatesForGap({ start: gap.start, end: gap.end })}
-                            style={{ width: `${cardWidth}rem`, maxWidth: '85vw' }}
-                            className="flex-shrink-0 h-[60px] flex flex-col items-center justify-center gap-1 bg-amber-50 border-2 border-dashed border-amber-200 text-amber-600 rounded-xl hover:bg-amber-100 hover:border-amber-400 transition-all opacity-80 hover:opacity-100"
-                          >
-                            <Plus size={16} />
-                            <span className="text-[10px] font-bold leading-tight text-center">
-                              {formatDurationText(gap.duration)}
-                            </span>
-                          </button>
-                        );
-                      }
-
-                      // CASO B: Rendering dell'Appuntamento Normale
-                      const app = itemObj.data as Appointment & { customer?: UserProfile };
-                      const duration = (app.endTime.toDate().getTime() - app.startTime.toDate().getTime()) / (1000 * 60);
-                      
-                      const isMobile = typeof window !== 'undefined' && window.innerWidth < 640;
-                      const baseWidth = isMobile ? 7 : 10; 
-                      const cardWidth = (duration / 30) * baseWidth; 
-                      
-                      const isCandidate = rescheduleCandidates.some(c => c.id === app.id);
-                      const isSelected = selectedCandidates.includes(app.id!);
-                      const selectionMode = showGapFiller !== null;
-
-                      return (
+                    <>
+                      {/* CASO 2A: Overlay Apertura (Posizionato sulla SINISTRA dello slot) */}
+                      {offRange && offRange.label.includes('Apertura') && (
                         <div 
-                          key={app.id} 
-                          id={`appointment-${app.id}`}
-                          onClick={() => {
-                            if (selectionMode) {
-                              if (isCandidate) toggleCandidate(app.id!);
-                            } else {
-                              setSelectedAppointment(app);
-                            }
+                          style={{ 
+                            width: `${((offRange.end.getTime() - offRange.start.getTime()) / 60000 / 30) * (typeof window !== 'undefined' && window.innerWidth < 640 ? 7 : 10)}rem`,
+                            maxWidth: '45vw'
                           }}
-                          style={{ width: `${cardWidth}rem`, maxWidth: '85vw' }}
-                          className={cn(
-                            "flex-shrink-0 p-2 sm:p-2.5 rounded-xl shadow-md flex flex-col justify-between text-left transition-all cursor-pointer relative min-h-[76px] sm:h-[88px] duration-500",
-                            app.id === highlightedAppId ? "ring-4 ring-emerald-500 shadow-[0_0_30px_rgba(16,185,129,0.6)] scale-[1.05] z-20" : "hover:scale-[1.02]",
-                            selectionMode && !isCandidate ? "bg-gray-100 text-gray-400 grayscale shadow-none border-gray-200" :
-                            isSelected ? "bg-emerald-500 text-white ring-4 ring-emerald-500/30" :
-                            (app.status === 'completed' || (app.status === 'booked' && isBefore(app.endTime.toDate(), currentTime))) ? "bg-emerald-600 text-white" :
-                            "bg-black text-white" 
-                          )}
+                          className="flex-shrink-0 h-[60px] flex items-center justify-center bg-gray-100/80 border-2 border-dashed border-gray-300 text-gray-400 rounded-xl select-none"
                         >
-                          <div>
-                            <div className="flex justify-between items-start gap-2">
-                              <div className="font-bold text-[11px] sm:text-xs truncate">
-                                {app.isForFriend ? `Per: ${app.friendDetails?.firstName}` : app.customer?.displayName}
-                              </div>
-                              <div className="text-[9px] font-bold opacity-60 flex flex-col items-end leading-tight shrink-0">
-                                <span>{format(app.startTime.toDate(), 'HH:mm')}</span>
-                                <span>- {format(app.endTime?.toDate() || addMinutes(app.startTime.toDate(), app.services.reduce((acc, s) => acc + s.duration, 0)), 'HH:mm')}</span>
-                              </div>
-                            </div>
-                            <div className="text-[9px] opacity-70 mt-0.5 truncate">
-                              {app.services.map(s => s.name).join(', ')}
-                            </div>
-                          </div>
-                          <div className="flex justify-between items-center mt-1.5 pt-1.5 border-t border-white/10">
-                            <div className="flex items-center gap-1 text-[9px] truncate">
-                              <Phone size={8} /> {app.isForFriend ? app.friendDetails?.phone?.slice(-10) : app.customer?.phoneNumber?.slice(-10)}
-                            </div>
-                            {app.isForFriend && (
-                              <div className="text-[8px] bg-white/20 px-1 rounded uppercase font-bold">Amico</div>
-                            )}
-                          </div>
-
-                          {isSelected && (
-                            <div className="absolute bottom-1 right-1 bg-white text-emerald-600 rounded-full p-0.5 shadow-sm animate-in zoom-in">
-                              <Check size={10} strokeWidth={4} />
-                            </div>
-                          )}
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-center px-2">
+                            {offRange.label}
+                          </span>
                         </div>
-                      );
-                    })
+                      )}
+
+                      {/* CASO 3: Appuntamenti e Buchi Orari */}
+                      {combinedItems.length === 0 && !offRange ? (
+                        <div className="flex-1"></div>
+                      ) : (
+                        combinedItems.map((itemObj, idx) => {
+                          if (itemObj.type === 'gap') {
+                            const gap = itemObj.data as { start: Date, end: Date, duration: number };
+                            const isMobile = typeof window !== 'undefined' && window.innerWidth < 640;
+                            const baseWidth = isMobile ? 7 : 10; 
+                            const cardWidth = (gap.duration / 30) * baseWidth;
+                            
+                            return (
+                              <button
+                                key={`gap-${idx}`}
+                                onClick={() => findCandidatesForGap({ start: gap.start, end: gap.end })}
+                                style={{ width: `${cardWidth}rem`, maxWidth: '85vw' }}
+                                className="flex-shrink-0 h-[60px] flex flex-col items-center justify-center gap-1 bg-amber-50 border-2 border-dashed border-amber-200 text-amber-600 rounded-xl hover:bg-amber-100 hover:border-amber-400 transition-all opacity-80 hover:opacity-100"
+                              >
+                                <Plus size={16} />
+                                <span className="text-[10px] font-bold leading-tight text-center">
+                                  {formatDurationText(gap.duration)}
+                                </span>
+                              </button>
+                            );
+                          }
+
+                          const app = itemObj.data as Appointment & { customer?: UserProfile };
+                          const duration = (app.endTime.toDate().getTime() - app.startTime.toDate().getTime()) / (1000 * 60);
+                          
+                          const isMobile = typeof window !== 'undefined' && window.innerWidth < 640;
+                          const baseWidth = isMobile ? 7 : 10; 
+                          const cardWidth = (duration / 30) * baseWidth; 
+                          
+                          const isCandidate = rescheduleCandidates.some(c => c.id === app.id);
+                          const isSelected = selectedCandidates.includes(app.id!);
+                          const selectionMode = showGapFiller !== null;
+
+                          return (
+                            <div 
+                              key={app.id} 
+                              id={`appointment-${app.id}`}
+                              onClick={() => {
+                                if (selectionMode) {
+                                  if (isCandidate) toggleCandidate(app.id!);
+                                } else {
+                                  setSelectedAppointment(app);
+                                }
+                              }}
+                              style={{ width: `${cardWidth}rem`, maxWidth: '85vw' }}
+                              className={cn(
+                                "flex-shrink-0 p-2 sm:p-2.5 rounded-xl shadow-md flex flex-col justify-between text-left transition-all cursor-pointer relative min-h-[76px] sm:h-[88px] duration-500",
+                                app.id === highlightedAppId ? "ring-4 ring-emerald-500 shadow-[0_0_30px_rgba(16,185,129,0.6)] scale-[1.05] z-20" : "hover:scale-[1.02]",
+                                selectionMode && !isCandidate ? "bg-gray-100 text-gray-400 grayscale shadow-none border-gray-200" :
+                                isSelected ? "bg-emerald-500 text-white ring-4 ring-emerald-500/30" :
+                                (app.status === 'completed' || (app.status === 'booked' && isBefore(app.endTime.toDate(), currentTime))) ? "bg-emerald-600 text-white" :
+                                "bg-black text-white" 
+                              )}
+                            >
+                              <div>
+                                <div className="flex justify-between items-start gap-2">
+                                  <div className="font-bold text-[11px] sm:text-xs truncate">
+                                    {app.isForFriend ? `Per: ${app.friendDetails?.firstName}` : app.customer?.displayName}
+                                  </div>
+                                  <div className="text-[9px] font-bold opacity-60 flex flex-col items-end leading-tight shrink-0">
+                                    <span>{format(app.startTime.toDate(), 'HH:mm')}</span>
+                                    <span>- {format(app.endTime?.toDate() || addMinutes(app.startTime.toDate(), app.services.reduce((acc, s) => acc + s.duration, 0)), 'HH:mm')}</span>
+                                  </div>
+                                </div>
+                                <div className="text-[9px] opacity-70 mt-0.5 truncate">
+                                  {app.services.map(s => s.name).join(', ')}
+                                </div>
+                              </div>
+                              <div className="flex justify-between items-center mt-1.5 pt-1.5 border-t border-white/10">
+                                <div className="flex items-center gap-1 text-[9px] truncate">
+                                  <Phone size={8} /> {app.isForFriend ? app.friendDetails?.phone?.slice(-10) : app.customer?.phoneNumber?.slice(-10)}
+                                </div>
+                                {app.isForFriend && (
+                                  <div className="text-[8px] bg-white/20 px-1 rounded uppercase font-bold">Amico</div>
+                                )}
+                              </div>
+
+                              {isSelected && (
+                                <div className="absolute bottom-1 right-1 bg-white text-emerald-600 rounded-full p-0.5 shadow-sm animate-in zoom-in">
+                                  <Check size={10} strokeWidth={4} />
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })
+                      )}
+
+                      {/* CASO 2B: Overlay Chiusura (Posizionato sulla DESTRA dello slot) */}
+                      {offRange && offRange.label.includes('Chiusura') && (
+                        <div 
+                          style={{ 
+                            width: `${((offRange.end.getTime() - offRange.start.getTime()) / 60000 / 30) * (typeof window !== 'undefined' && window.innerWidth < 640 ? 7 : 10)}rem`,
+                            maxWidth: '45vw'
+                          }}
+                          className="flex-shrink-0 h-[60px] flex items-center justify-center bg-gray-100/80 border-2 border-dashed border-gray-300 text-gray-400 rounded-xl select-none"
+                        >
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-center px-2">
+                            {offRange.label}
+                          </span>
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
               </div>
@@ -1002,7 +1146,6 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
                         >
                           <Send size={16} /> WhatsApp
                         </a>
-                        {/* Email option for desktop */}
                         <a 
                           href={`mailto:${selectedAppointment.isForFriend ? selectedAppointment.friendDetails?.email : selectedAppointment.customer?.email}`}
                           className="hidden sm:flex items-center gap-3 px-4 py-3 hover:bg-gray-50 text-sm font-bold text-blue-600"
@@ -1044,8 +1187,6 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
               </div>
 
               <div className="pt-6 border-t border-gray-100 flex flex-col gap-3">
-                
-                {/* INIZIO NUOVO BOTTONE WHATSAPP DINAMICO */}
                 <WhatsAppButton 
                   type={
                     activeNotifType === 'booking' ? 'booking' :
@@ -1053,7 +1194,7 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
                     activeNotifType === 'proposal_accepted' ? 'proposal_accepted' :
                     'manual_management_required'
                   }
-                 customerName={
+                  customerName={
                     selectedAppointment.isForFriend 
                       ? selectedAppointment.friendDetails?.firstName || 'Cliente'
                       : selectedAppointment.customer?.displayName || 'Cliente'
@@ -1073,9 +1214,7 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
                   }
                   className="w-full py-4 bg-[#25D366] text-white rounded-2xl font-bold hover:bg-[#20bd5a] transition-all flex items-center justify-center gap-2 shadow-md mb-2"
                 />
-                {/* FINE NUOVO BOTTONE WHATSAPP DINAMICO */}
 
-                {/* Tasto Annulla (Solo se prenotato e futuro) */}
                 {selectedAppointment.status === 'booked' && !isBefore(selectedAppointment.startTime.toDate(), currentTime) && (
                   <button
                     onClick={() => {
@@ -1088,7 +1227,6 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
                   </button>
                 )}
                 
-                {/* Tasto Proponi Cambio (Solo se annullato) */}
                 {selectedAppointment.status === 'cancelled' && (
                   <button
                     disabled={isBefore(selectedAppointment.startTime.toDate(), currentTime)}
@@ -1106,7 +1244,6 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
                   </button>
                 )}
 
-                {/* Tasto Chiudi */}
                 <button
                   onClick={() => {
                     setSelectedAppointment(null);
@@ -1122,6 +1259,7 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
           </div>
         </div>
       )}
+
       {/* Cancellation Confirmation Modal */}
       {showCancelConfirm && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-[80] p-4 animate-in fade-in">
@@ -1154,7 +1292,7 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
         </div>
       )}
 
-{/* Popup Proposta Rifiutata - Design Pulito e Diretto */}
+      {/* Popup Proposta Rifiutata */}
       {declinedProposalNotif && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[150] p-4 animate-in fade-in duration-200">
           <div className="bg-white w-full max-w-sm rounded-[32px] p-8 shadow-2xl border border-white/20 text-center animate-in zoom-in-95">
@@ -1208,7 +1346,7 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
         </div>
       )}
 
-{/* Modal Promemoria WhatsApp */}
+      {/* Modal Promemoria WhatsApp */}
       {isReminderModalOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[9999] p-4 animate-in fade-in">
           <div className="bg-white w-full max-w-lg rounded-[32px] overflow-hidden shadow-2xl flex flex-col max-h-[85vh]">
@@ -1233,7 +1371,6 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
               ) : (
                 <div className="divide-y divide-gray-50">
                   {tomorrowsAppointments.map(app => {
-                    // Protezioni Antiproiettile
                     const phone = (app.isForFriend ? app.friendDetails?.phone : app.customer?.phoneNumber) || '';
                     const name = (app.isForFriend ? app.friendDetails?.firstName : app.customer?.displayName) || 'Cliente';
                     const time = app.startTime?.toDate ? format(app.startTime.toDate(), 'HH:mm') : '--:--';
@@ -1284,7 +1421,6 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
           onClose={() => setIsManualBookingOpen(false)} 
           onSuccess={() => {
             setIsManualBookingOpen(false);
-            // The onSnapshot will handle the update
           }}
         />
       )}
@@ -1317,15 +1453,14 @@ function ManualBookingModal({ onClose, onSuccess }: ManualBookingModalProps) {
   const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
   
   useEffect(() => {
-  const q = query(collection(db, 'calendar_exceptions'));
-  const unsubscribe = onSnapshot(q, (snapshot) => {
-    const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as SpecialDay[];
-    setSpecialDays(docs);
-  });
-  return () => unsubscribe();
-}, []);
+    const q = query(collection(db, 'calendar_exceptions'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as SpecialDay[];
+      setSpecialDays(docs);
+    });
+    return () => unsubscribe();
+  }, []);
 
-  // Search for contacts as the barber types
   useEffect(() => {
     const searchContacts = async () => {
       if (firstName.length < 2) {
@@ -1344,7 +1479,6 @@ function ManualBookingModal({ onClose, onSuccess }: ManualBookingModalProps) {
         const snapshot = await getDocs(q);
         const results = snapshot.docs.map(d => d.data() as any);
         
-        // Filter by lastName if provided (case-insensitive)
         const filtered = results.filter(r => 
           !lastName || r.lastNameLower.startsWith(lastName.toLowerCase())
         );
@@ -1368,15 +1502,15 @@ function ManualBookingModal({ onClose, onSuccess }: ManualBookingModalProps) {
     setSuggestions([]);
   };
 
-const next30Days = React.useMemo(() => {
-  const days = eachDayOfInterval({ start: new Date(), end: addDays(new Date(), 30) });
-  return days.filter(d => {
-    const dateString = format(d, 'yyyy-MM-dd');
-    const exception = specialDays.find(ex => ex.date === dateString);
-    if (exception) return !exception.isClosed;
-    return !DEFAULT_CLOSED_DAYS.includes(getDay(d));
-  });
-}, [specialDays]);
+  const next30Days = React.useMemo(() => {
+    const days = eachDayOfInterval({ start: new Date(), end: addDays(new Date(), 30) });
+    return days.filter(d => {
+      const dateString = format(d, 'yyyy-MM-dd');
+      const exception = specialDays.find(ex => ex.date === dateString);
+      if (exception) return !exception.isClosed;
+      return !DEFAULT_CLOSED_DAYS.includes(getDay(d));
+    });
+  }, [specialDays]);
 
   useEffect(() => {
     if (selectedDate && selectedServices.length > 0) {
@@ -1391,20 +1525,15 @@ const next30Days = React.useMemo(() => {
     const dayStart = startOfDay(selectedDate);
     const dayEnd = endOfDay(selectedDate);
 
-    // 1. Formattiamo la data per Firebase
     const dateString = format(selectedDate, 'yyyy-MM-dd');
-    
-    // 2. Cerchiamo se c'è un'eccezione in tempo reale per questo giorno
     const exceptionForToday = specialDays.find(ex => ex.date === dateString);
 
-    // 3. Controllo blocco se è chiuso (per ferie speciali o perché è un giorno di chiusura standard)
     if (exceptionForToday?.isClosed || (!exceptionForToday && DEFAULT_CLOSED_DAYS.includes(getDay(selectedDate)))) {
       setAvailableSlots([]);
       setLoading(false);
       return;
     }
 
-    // 4. Definiamo quali orari usare (quelli speciali se ci sono, altrimenti gli standard)
     const activeOpeningHours = exceptionForToday?.openingHours || DEFAULT_OPENING_HOURS;
 
     try {
@@ -1421,9 +1550,7 @@ const next30Days = React.useMemo(() => {
       const totalDuration = selectedServices.reduce((acc, s) => acc + s.duration, 0);
       const slots: Date[] = [];
 
-      // 5. Cicliamo sui nuovi orari attivi!
       activeOpeningHours.forEach(range => {
-        // Estraiamo ore e minuti dai decimali (es. 8.5 -> 8 ore, 30 min)
         const startHour = Math.floor(range.start);
         const startMin = Math.round((range.start - startHour) * 60);
         let current = setMinutes(setHours(dayStart, startHour), startMin);
@@ -1463,7 +1590,6 @@ const next30Days = React.useMemo(() => {
       return;
     }
 
-    // Phone validation (same as customer side)
     if (phone.replace(/\D/g, '').length < 10) {
       alert("Il numero di telefono deve contenere almeno 10 cifre.");
       return;
@@ -1476,22 +1602,18 @@ const next30Days = React.useMemo(() => {
     const fullPhoneNumber = phonePrefix + phone;
 
     try {
-      // 1. RICERCA UTENTE ESISTENTE (La Magia)
       let finalCustomerId = 'manual_entry';
       let isRegisteredUser = false;
 
       const usersRef = collection(db, 'users');
-      // Cerchiamo se c'è un utente registrato con questo stesso numero di telefono
       const userQuery = query(usersRef, where('phoneNumber', '==', fullPhoneNumber), limit(1));
       const userSnapshot = await getDocs(userQuery);
 
       if (!userSnapshot.empty) {
-        // Trovato! Sostituiamo 'manual_entry' con il suo vero ID
         finalCustomerId = userSnapshot.docs[0].id;
         isRegisteredUser = true;
       }
 
-      // 2. Salva/Aggiorna in rubrica locale (contacts)
       const contactId = `${firstName.toLowerCase()}_${lastName.toLowerCase()}`;
       await setDoc(doc(db, 'contacts', contactId), {
         firstName,
@@ -1504,7 +1626,6 @@ const next30Days = React.useMemo(() => {
         updatedAt: Timestamp.now()
       }, { merge: true });
 
-      // 3. Controllo buchi/cancellati e pulizia
       const q = query(
         collection(db, 'appointments'),
         where('startTime', '==', Timestamp.fromDate(selectedSlot)),
@@ -1515,9 +1636,8 @@ const next30Days = React.useMemo(() => {
         await deleteDoc(doc(db, 'appointments', d.id));
       }
 
-      // 4. CREAZIONE APPUNTAMENTO
       const newAppointmentRef = await addDoc(collection(db, 'appointments'), {
-        customerId: finalCustomerId, // <-- Qui usiamo l'ID vero se esiste!
+        customerId: finalCustomerId,
         customer: {
           displayName: `${firstName} ${lastName}`,
           phoneNumber: fullPhoneNumber,
@@ -1529,23 +1649,21 @@ const next30Days = React.useMemo(() => {
         status: 'booked',
         totalAmount: totalAmount,
         createdAt: Timestamp.now(),
-        isManual: true // <-- Manteniamo questo flag per le statistiche del barbiere
+        isManual: true
       });
 
-      // 5. INVIO NOTIFICA PUSH/IN-APP (Solo se è registrato)
       if (isRegisteredUser) {
         await addDoc(collection(db, 'notifications'), {
-        userId: finalCustomerId,
-        title: 'Nuovo Appuntamento Fissato',
-        message: `Il barbiere ha inserito un appuntamento per te il ${format(selectedSlot, 'd MMM')} alle ${format(selectedSlot, 'HH:mm')}`,
-        type: 'booking',
-        read: false,
-        createdAt: Timestamp.now(),
-        appointmentId: newAppointmentRef.id
-  });
-}
+          userId: finalCustomerId,
+          title: 'Nuovo Appuntamento Fissato',
+          message: `Il barbiere ha inserito un appuntamento per te il ${format(selectedSlot, 'd MMM')} alle ${format(selectedSlot, 'HH:mm')}`,
+          type: 'booking',
+          read: false,
+          createdAt: Timestamp.now(),
+          appointmentId: newAppointmentRef.id
+        });
+      }
 
-      // 6. WHATSAPP (Se la spunta è attiva)
       if (sendWhatsApp) {
         const link = generateWhatsAppLink(
           'booking', 
@@ -1695,16 +1813,14 @@ const next30Days = React.useMemo(() => {
                     )}
                   >
                     <div className="font-bold text-sm">{service.name}</div>
-                  {/* INIZIO DESCRIZIONE */}
-                  {service.description && (
-                    <div className={cn("text-[10px] mt-0.5 leading-tight", isSelected ? "text-gray-400" : "text-gray-500")}>
-                      {service.description}
+                    {service.description && (
+                      <div className={cn("text-[10px] mt-0.5 leading-tight", isSelected ? "text-gray-400" : "text-gray-500")}>
+                        {service.description}
+                      </div>
+                    )}
+                    <div className={cn("text-[10px] mt-1 font-medium", isSelected ? "text-gray-400" : "text-gray-400")}>
+                      {service.duration} min • €{service.price}
                     </div>
-                  )}
-                  {/* FINE DESCRIZIONE */}
-                  <div className={cn("text-[10px] mt-1 font-medium", isSelected ? "text-gray-400" : "text-gray-400")}>
-                    {service.duration} min • €{service.price}
-                  </div>
                     {isSelected && (
                       <div className="absolute top-2 right-2">
                         <CheckCircle2 size={14} className="text-white" />
@@ -1787,8 +1903,6 @@ const next30Days = React.useMemo(() => {
         </div>
 
         <div className="p-6 border-t border-gray-100 bg-gray-50/50">
-          
-          {/* NUOVO CHECKBOX WHATSAPP */}
           <div className="flex items-center gap-3 mb-4 px-2">
             <input
               type="checkbox"
