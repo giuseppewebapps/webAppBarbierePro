@@ -13,3 +13,5 @@ rollback.cjs
 serviceAccountKey.json
 cleanupUsers.cjs
 deduplicateAppointments.cjs
+cleanupDatabase.cjs
+populateFakeAppointments.cjs
