@@ -867,8 +867,8 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
               const exceptionForToday = specialDays.find(ex => ex.date === dateString);
               const activeOpeningHours = exceptionForToday?.openingHours || businessSettings.openingHours;
 
-              const itemStart = item;
-              const itemEnd = addHours(item, 1);
+              const itemStart = item; // Es. 11:00
+              const itemEnd = addHours(item, 1); // Es. 12:00
               const nowPlus30 = addMinutes(currentTime, 30);
 
               // Troviamo il turno attivo per questo slot
@@ -893,26 +893,41 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
                 const eM = Math.round((currentShift.end - eH) * 60);
                 const shiftEnd = setMinutes(setHours(startOfDay(selectedDate), eH), eM);
 
-                // Il marker iniziale viene "spinto" avanti se l'ora inizia prima dell'apertura (es. da 15:00 spinto a 15:45)
+                // Marker iniziale di base per quest'ora (rispettando l'apertura del turno)
                 let currentMarker = isBefore(itemStart, shiftStart) ? shiftStart : itemStart;
                 const realSlotEnd = isAfter(itemEnd, shiftEnd) ? shiftEnd : itemEnd;
 
-                const sortedApps = [...apps].sort((a, b) => a.startTime.toMillis() - b.startTime.toMillis());
-
-                sortedApps.forEach(app => {
+                // Prendiamo TUTTI gli appuntamenti del giorno che intersecano questa riga oraria,
+                // non solo quelli che INIZIANO in quest'ora!
+                const dayAppointmentsInSlot = filteredAppointments.filter(app => {
+                  if (app.status === 'cancelled') return false;
                   const appStart = app.startTime.toDate();
+                  const appEnd = app.endTime.toDate();
+                  // L'appuntamento interseca la riga se inizia prima della fine dello slot E finisce dopo l'inizio dello slot
+                  return isBefore(appStart, realSlotEnd) && isAfter(appEnd, currentMarker);
+                }).sort((a, b) => a.startTime.toMillis() - b.startTime.toMillis());
+
+                // Se un appuntamento è iniziato prima (es. 10:45) e finisce dentro quest'ora (es. 11:30),
+                // aggiorniamo subito il marker iniziale per spingerlo alle 11:30!
+                dayAppointmentsInSlot.forEach(app => {
+                  const appStart = app.startTime.toDate();
+                  const appEnd = app.endTime.toDate();
+
+                  // Se c'è uno spazio libero PRIMA dell'inizio di questo appuntamento
                   if (isBefore(currentMarker, appStart) && isBefore(appStart, realSlotEnd)) {
                     const dur = (appStart.getTime() - currentMarker.getTime()) / 60000;
                     if (dur >= 15 && isAfter(currentMarker, nowPlus30)) {
                       gapsForThisItem.push({ start: currentMarker, end: appStart, duration: dur });
                     }
                   }
-                  const appEnd = app.endTime.toDate();
+
+                  // Spostiamo avanti il marker di occupazione fino alla fine dell'appuntamento corrente
                   if (isAfter(appEnd, currentMarker)) {
                     currentMarker = isBefore(appEnd, realSlotEnd) ? appEnd : realSlotEnd;
                   }
                 });
 
+                // Se rimane spazio libero DOPO l'ultimo appuntamento fino alla fine della riga
                 if (isBefore(currentMarker, realSlotEnd)) {
                   const dur = (realSlotEnd.getTime() - currentMarker.getTime()) / 60000;
                   if (dur >= 15 && isAfter(currentMarker, nowPlus30)) {
