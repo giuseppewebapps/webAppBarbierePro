@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { 
   onAuthStateChanged, 
-  signInWithRedirect, 
+  signInWithPopup, 
   GoogleAuthProvider, 
   signOut,
   signInWithEmailAndPassword,
@@ -176,7 +176,7 @@ export default function App() {
   const login = async () => {
     const provider = new GoogleAuthProvider();
     try {
-      await signInWithRedirect(auth, provider);
+      await signInWithPopup(auth, provider);
     } catch (error) {
       console.error('Login error:', error);
     }
