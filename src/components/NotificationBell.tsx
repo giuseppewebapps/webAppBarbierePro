@@ -3,7 +3,7 @@ import { Bell, Check, Trash2 } from 'lucide-react';
 import { Notification as AppNotification } from '../types';
 import { format } from 'date-fns';
 import { it } from 'date-fns/locale';
-import { doc, updateDoc, deleteDoc } from 'firebase/firestore';
+import { doc, updateDoc, deleteDoc, writeBatch } from 'firebase/firestore';
 import { db } from '../firebase';
 import { cn } from '../lib/utils';
 
@@ -14,29 +14,26 @@ interface NotificationBellProps {
 
 export default function NotificationBell({ notifications, onNotificationClick }: NotificationBellProps) {
   const [isOpen, setIsOpen] = useState(false);
+  const [isClearing, setIsClearing] = useState(false); // Nuovo stato per il caricamento
   const dropdownRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const prevCountRef = useRef(notifications.length);
   const unreadCount = notifications.filter(n => !n.read).length;
 
   useEffect(() => {
-    // Request notification permission
     if ('Notification' in window && Notification.permission === 'default') {
       Notification.requestPermission();
     }
   }, []);
 
   useEffect(() => {
-    // Play sound and show push notification if new notification arrives
     if (notifications.length > prevCountRef.current) {
-      const newNotif = notifications[0]; // Assuming latest is first
+      const newNotif = notifications[0]; 
       
-      // Play sound
       if (audioRef.current) {
         audioRef.current.play().catch(e => console.log('Audio play blocked:', e));
       }
 
-      // Show browser notification
       if ('Notification' in window && Notification.permission === 'granted') {
         const notif = new Notification(newNotif.title, {
           body: newNotif.message,
@@ -45,20 +42,15 @@ export default function NotificationBell({ notifications, onNotificationClick }:
           requireInteraction: true
         });
 
-        // Aggiungi click handler alla notifica push
         notif.onclick = () => {
-          // Porta l'utente all'appuntamento di riferimento
           if (onNotificationClick) {
             onNotificationClick(newNotif);
           }
-          // SBLOCCO POPUP SPECIALE PER NOTIFICHE PUSH
           if (newNotif.type === 'proposal_declined') {
             window.dispatchEvent(new CustomEvent('special-notification-click', { detail: newNotif }));
           }
 
-          // Chiudi la notifica
           notif.close();
-          // Porta la finestra in primo piano
           window.focus();
         };
       }
@@ -81,7 +73,6 @@ export default function NotificationBell({ notifications, onNotificationClick }:
       await updateDoc(doc(db, 'notifications', id), { read: true });
     } catch (error) {
       console.error('Error marking notification as read:', error);
-      // We don't throw here to avoid crashing the UI for a simple read mark
     }
   };
 
@@ -90,7 +81,26 @@ export default function NotificationBell({ notifications, onNotificationClick }:
       await deleteDoc(doc(db, 'notifications', id));
     } catch (error) {
       console.error('Error deleting notification:', error);
-      // We don't throw here to avoid crashing the UI for a simple delete
+    }
+  };
+
+  // 🚀 NUOVA FUNZIONE: Elimina tutte le notifiche non lette in un solo colpo
+  const handleClearAllUnread = async () => {
+    const unreadNotifs = notifications.filter(n => !n.read);
+    if (unreadNotifs.length === 0) return;
+    
+    setIsClearing(true);
+    try {
+      const batch = writeBatch(db);
+      unreadNotifs.forEach(notif => {
+        const notifRef = doc(db, 'notifications', notif.id!);
+        batch.delete(notifRef);
+      });
+      await batch.commit();
+    } catch (error) {
+      console.error('Error clearing unread notifications:', error);
+    } finally {
+      setIsClearing(false);
     }
   };
 
@@ -113,8 +123,22 @@ export default function NotificationBell({ notifications, onNotificationClick }:
         <div className="fixed inset-x-4 top-20 sm:absolute sm:inset-auto sm:right-0 sm:top-full sm:mt-2 sm:w-80 bg-white/95 backdrop-blur-xl border border-white/20 rounded-3xl shadow-2xl z-[150] overflow-hidden animate-in fade-in zoom-in-95 duration-200">
           <div className="p-4 border-b border-gray-100/50 flex justify-between items-center bg-gray-50/50">
             <h3 className="font-bold">Notifiche</h3>
-            <span className="text-xs text-gray-400">{unreadCount} non lette</span>
+            
+            {/* 🚀 L'intestazione ora mostra il bottone SVUOTA se ci sono notifiche non lette */}
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-gray-400">{unreadCount} non lette</span>
+              {unreadCount > 0 && (
+                <button 
+                  onClick={handleClearAllUnread}
+                  disabled={isClearing}
+                  className="text-[10px] text-red-500 hover:text-red-600 uppercase font-bold tracking-wider disabled:opacity-50 flex items-center gap-1 transition-colors bg-red-50 hover:bg-red-100 px-2 py-1 rounded-md"
+                >
+                  <Trash2 size={12} /> {isClearing ? '...' : 'Svuota'}
+                </button>
+              )}
+            </div>
           </div>
+          
           <div className="max-h-96 overflow-y-auto">
             {notifications.length === 0 ? (
               <div className="p-8 text-center text-gray-400 text-sm italic">
@@ -162,7 +186,10 @@ export default function NotificationBell({ notifications, onNotificationClick }:
                           </button>
                         )}
                         <button
-                          onClick={() => deleteNotification(n.id!)}
+                          onClick={(e) => {
+                            e.stopPropagation(); // Previene il click sull'intera notifica
+                            deleteNotification(n.id!);
+                          }}
                           className="p-1 text-red-400 hover:bg-red-50 rounded"
                           title="Elimina"
                         >

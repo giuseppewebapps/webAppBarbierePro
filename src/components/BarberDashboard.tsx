@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { 
   collection, 
   query, 
@@ -56,7 +56,8 @@ import {
   User,
   ChevronDown,
   Search,
-  MessageCircle
+  MessageCircle,
+  Settings
 } from 'lucide-react';
 import { useAuth } from '../App';
 import { WhatsAppButton } from './WhatsAppButton';
@@ -135,6 +136,11 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
   const [declinedProposalNotif, setDeclinedProposalNotif] = useState<any>(null);
   const [isReminderModalOpen, setIsReminderModalOpen] = useState(false);
   const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
+
+  // 🚀 NUOVI STATI PER LA MODIFICA RAPIDA CLIENTE
+  const [isEditingCustomer, setIsEditingCustomer] = useState(false);
+  const [editCustomerForm, setEditCustomerForm] = useState({ firstName: '', lastName: '', phone: '', email: '' });
+  const [savingCustomer, setSavingCustomer] = useState(false);
 
   // STATO IMPOSTAZIONI ORARI DINAMICHE
   const [businessSettings, setBusinessSettings] = useState<{
@@ -338,6 +344,125 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
     window.addEventListener('special-notification-click', handleSpecialNotif);
     return () => window.removeEventListener('special-notification-click', handleSpecialNotif);
   }, []);
+
+  const startEditingCustomer = () => {
+    if (!selectedAppointment) return;
+    const isFriend = selectedAppointment.isForFriend;
+    const fullName = isFriend 
+      ? `${selectedAppointment.friendDetails?.firstName || ''} ${selectedAppointment.friendDetails?.lastName || ''}` 
+      : (selectedAppointment.customer?.displayName || '');
+    const nameParts = fullName.trim().split(' ');
+    
+    setEditCustomerForm({
+      firstName: nameParts[0] || '',
+      lastName: nameParts.slice(1).join(' ') || '',
+      phone: (isFriend ? selectedAppointment.friendDetails?.phone : selectedAppointment.customer?.phoneNumber) || '',
+      email: (isFriend ? selectedAppointment.friendDetails?.email : selectedAppointment.customer?.email) || ''
+    });
+    setIsEditingCustomer(true);
+  };
+
+const handleSaveCustomerEdits = async () => {
+    if (!selectedAppointment) return;
+    setSavingCustomer(true);
+    try {
+      const fullName = `${editCustomerForm.firstName} ${editCustomerForm.lastName}`.trim();
+      
+      // 1. IGIENIZZAZIONE DATI (Strict Validation)
+      const rawPhone = editCustomerForm.phone.replace(/\D/g, '');
+      const pure10Digits = (rawPhone.startsWith('39') && rawPhone.length > 10) 
+        ? rawPhone.substring(2) 
+        : rawPhone.slice(-10);
+      const fullPhone = pure10Digits.length >= 9 ? `+39${pure10Digits}` : '';
+      const cleanContactPhone = pure10Digits;
+
+      const appRef = doc(db, 'appointments', selectedAppointment.id!);
+      
+      // 2. SALVATAGGIO IN CLOUD
+      if (selectedAppointment.isForFriend) {
+        await updateDoc(appRef, {
+          'friendDetails.firstName': editCustomerForm.firstName,
+          'friendDetails.lastName': editCustomerForm.lastName,
+          'friendDetails.phone': fullPhone,
+          'friendDetails.email': editCustomerForm.email
+        });
+      } else {
+        await updateDoc(appRef, {
+          'customer.displayName': fullName,
+          'customer.phoneNumber': fullPhone,
+          'customer.email': editCustomerForm.email
+        });
+
+        // Fail-Safe Update su Users
+        const isAppUser = selectedAppointment.customerId && selectedAppointment.customerId !== 'manual_entry' && selectedAppointment.customerId !== 'test_entry';
+        
+        if (isAppUser) {
+          try {
+            await updateDoc(doc(db, 'users', selectedAppointment.customerId), {
+              displayName: fullName,
+              phoneNumber: fullPhone,
+              ...(editCustomerForm.email ? { email: editCustomerForm.email } : {}),
+              updatedAt: Timestamp.now()
+            });
+            // REGOLA D'ORO: Distruggiamo l'eventuale contatto ombra se esisteva!
+            if (cleanContactPhone) {
+              try { await deleteDoc(doc(db, 'contacts', cleanContactPhone)); } catch(e) {}
+            }
+          } catch (e) {
+            console.warn("Salto aggiornamento cloud utente (documento protetto o legacy).");
+          }
+        } else {
+          // L'utente non ha l'app: Aggiorna la rubrica manuale
+          if (cleanContactPhone) {
+            await setDoc(doc(db, 'contacts', cleanContactPhone), {
+              firstName: editCustomerForm.firstName,
+              lastName: editCustomerForm.lastName,
+              firstNameLower: editCustomerForm.firstName.toLowerCase(),
+              lastNameLower: editCustomerForm.lastName.toLowerCase(),
+              phone: cleanContactPhone,
+              phonePrefix: '+39',
+              email: editCustomerForm.email,
+              updatedAt: Timestamp.now()
+            }, { merge: true });
+          }
+        }
+      }
+
+      // 3. AGGIORNAMENTO ISTANTANEO UI (Senza F5)
+      const updatedCustomerObj = selectedAppointment.isForFriend ? undefined : {
+        ...selectedAppointment.customer!,
+        displayName: fullName,
+        phoneNumber: fullPhone,
+        email: editCustomerForm.email
+      };
+      
+      const updatedFriendObj = selectedAppointment.isForFriend ? {
+        ...selectedAppointment.friendDetails!,
+        firstName: editCustomerForm.firstName,
+        lastName: editCustomerForm.lastName,
+        phone: fullPhone,
+        email: editCustomerForm.email
+      } : undefined;
+
+      setAppointments(prev => prev.map(app => 
+        app.id === selectedAppointment.id 
+          ? { ...app, customer: updatedCustomerObj || app.customer, friendDetails: updatedFriendObj || app.friendDetails } 
+          : app
+      ));
+
+      setSelectedAppointment(prev => {
+        if (!prev) return prev;
+        return { ...prev, customer: updatedCustomerObj || prev.customer, friendDetails: updatedFriendObj || prev.friendDetails };
+      });
+      
+      setIsEditingCustomer(false);
+    } catch (error) {
+      console.error("Errore salvataggio cliente:", error);
+      alert("Errore durante l'aggiornamento dei dati.");
+    } finally {
+      setSavingCustomer(false);
+    }
+  };
 
   const handleCancel = async (app: Appointment) => {
     const path = `appointments/${app.id}`;
@@ -1154,6 +1279,7 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
                 setSelectedAppointment(null);
                 setActiveNotifType(null);
                 setShowContactMenu(false);
+                setIsEditingCustomer(false);
               }} className="p-1 hover:bg-white/10 rounded-full">
                 <XCircle size={24} />
               </button>
@@ -1164,13 +1290,45 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
                   <Clock size={32} />
                 </div>
                 <div className="flex-1">
-                  <div className="text-2xl font-bold">
-                    {selectedAppointment.isForFriend 
-                      ? `${selectedAppointment.friendDetails?.firstName} ${selectedAppointment.friendDetails?.lastName}` 
-                      : selectedAppointment.customer?.displayName}
-                  </div>
-                  
-                  <div className="relative mt-1">
+                  {isEditingCustomer ? (
+                    <div className="bg-white rounded-2xl p-4 shadow-inner border border-gray-100 space-y-3 mt-1 animate-in fade-in zoom-in-95 duration-200">
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="text-[10px] font-bold text-gray-400 uppercase">Nome</label>
+                          <input type="text" value={editCustomerForm.firstName} onChange={e => setEditCustomerForm({...editCustomerForm, firstName: e.target.value})} className="w-full px-3 py-2 bg-gray-50 rounded-xl border-none focus:ring-2 focus:ring-emerald-500 text-sm font-bold text-black outline-none" />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold text-gray-400 uppercase">Cognome</label>
+                          <input type="text" value={editCustomerForm.lastName} onChange={e => setEditCustomerForm({...editCustomerForm, lastName: e.target.value})} className="w-full px-3 py-2 bg-gray-50 rounded-xl border-none focus:ring-2 focus:ring-emerald-500 text-sm font-bold text-black outline-none" />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-gray-400 uppercase">Telefono</label>
+                        <input type="tel" value={editCustomerForm.phone} onChange={e => setEditCustomerForm({...editCustomerForm, phone: e.target.value.replace(/\D/g, '')})} className="w-full px-3 py-2 bg-gray-50 rounded-xl border-none focus:ring-2 focus:ring-emerald-500 text-sm font-bold text-black outline-none" />
+                      </div>
+                      <div className="flex gap-2 pt-2">
+                        <button onClick={handleSaveCustomerEdits} disabled={savingCustomer} className="flex-1 py-2 bg-black text-white rounded-xl text-xs font-bold hover:bg-gray-800 disabled:opacity-50 flex items-center justify-center gap-1 transition-all shadow-md">
+                          {savingCustomer ? 'Salvataggio...' : <><Check size={14} /> Salva</>}
+                        </button>
+                        <button onClick={() => setIsEditingCustomer(false)} className="px-4 py-2 bg-gray-100 text-gray-600 rounded-xl text-xs font-bold hover:bg-gray-200 transition-all">
+                          Annulla
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="animate-in fade-in duration-200">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="text-2xl font-bold leading-tight">
+                          {selectedAppointment.isForFriend 
+                            ? `${selectedAppointment.friendDetails?.firstName} ${selectedAppointment.friendDetails?.lastName || ''}` 
+                            : selectedAppointment.customer?.displayName}
+                        </div>
+                        <button onClick={startEditingCustomer} className="p-2 bg-gray-100 text-gray-500 hover:text-black hover:bg-gray-200 rounded-xl transition-all shadow-sm shrink-0">
+                          <Settings size={18} />
+                        </button>
+                      </div>
+                      
+                      <div className="relative mt-1">
                     <button 
                       onClick={() => setShowContactMenu(!showContactMenu)}
                       className="text-emerald-600 font-bold flex items-center gap-2 hover:bg-emerald-50 px-3 py-1.5 -ml-3 rounded-xl transition-all"
@@ -1211,6 +1369,8 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
                   {selectedAppointment.isForFriend && (
                     <div className="text-xs text-amber-600 font-bold mt-2 flex items-center gap-1">
                       <AlertCircle size={12} /> Prenotato da {selectedAppointment.customer?.displayName} per un amico
+                    </div>
+                  )}
                     </div>
                   )}
                 </div>
@@ -1301,6 +1461,7 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
                     setSelectedAppointment(null);
                     setActiveNotifType(null);
                     setShowContactMenu(false);
+                    setIsEditingCustomer(false);
                   }}
                   className="w-full py-4 bg-gray-100 text-gray-600 rounded-2xl font-bold hover:bg-gray-200 transition-all"
                 >
@@ -1507,8 +1668,25 @@ function ManualBookingModal({ onClose, onSuccess, businessSettings }: ManualBook
   const [loading, setLoading] = useState(false);
   const [sendWhatsApp, setSendWhatsApp] = useState(true);
   const [suggestions, setSuggestions] = useState<{ firstName: string, lastName: string, phone: string, email?: string, phonePrefix?: string }[]>([]);
-  const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
+const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
   
+  // 🚀 NUOVO STATO: La "Rubrica Universale" scaricata in memoria (RAM)
+  const [globalDirectory, setGlobalDirectory] = useState<{ firstName: string, lastName: string, phone: string, email: string, displayPhone: string, phonePrefix: string }[]>([]);
+  const [directoryLoaded, setDirectoryLoaded] = useState(false);
+
+  // Ref per gestire il clic fuori dalla tendina
+  const searchContainerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (searchContainerRef.current && !searchContainerRef.current.contains(event.target as Node)) {
+        setSuggestions([]); 
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
   useEffect(() => {
     const q = query(collection(db, 'calendar_exceptions'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -1518,45 +1696,98 @@ function ManualBookingModal({ onClose, onSuccess, businessSettings }: ManualBook
     return () => unsubscribe();
   }, []);
 
+  // 🚀 STEP 1: CARICAMENTO SINGOLO (Tutto il database in RAM al primo avvio della modale)
   useEffect(() => {
-    const searchContacts = async () => {
-      if (firstName.length < 2) {
-        setSuggestions([]);
-        return;
-      }
-
+    const fetchEntireDirectory = async () => {
       try {
-        const searchStr = firstName.toLowerCase();
-        const q = query(
-          collection(db, 'contacts'),
-          where('firstNameLower', '>=', searchStr),
-          where('firstNameLower', '<=', searchStr + '\uf8ff'),
-          limit(10) // Aumentato leggermente per permettere la deduplicazione
-        );
-        const snapshot = await getDocs(q);
-        const results = snapshot.docs.map(d => d.data() as any);
+        const contactsSnap = await getDocs(collection(db, 'contacts'));
+        const usersSnap = await getDocs(collection(db, 'users'));
         
-        // 1. Filtro per cognome
-        const filtered = results.filter(r => 
-          !lastName || r.lastNameLower.startsWith(lastName.toLowerCase())
-        );
+        const combined: any[] = [];
 
-        // 2. 🚀 FIX: Deduplicazione per numero di telefono (SaaS Best Practice)
-        // Crea una mappa usando il numero come chiave, sovrascrivendo i doppioni, poi ri-estrae i valori
-        const uniqueSuggestions = Array.from(
-          new Map(filtered.map(item => [item.phone, item])).values()
-        );
-        
-        // Prende solo i primi 5 risultati unici
-        setSuggestions(uniqueSuggestions.slice(0, 5));
+        // 1A. Preleviamo tutti gli utenti che usano l'App
+        usersSnap.docs.forEach(doc => {
+          const u = doc.data();
+          if (u.role === 'barber') return; // Escludiamo i barbieri stessi
+          
+          const fullName = u.displayName || '';
+          const parts = fullName.split(' ');
+          const fName = parts[0] || '';
+          const lName = parts.slice(1).join(' ') || '';
+          
+          const rawPhone = (u.phoneNumber || '').replace(/\D/g, '');
+          const cleanPhone = (rawPhone.startsWith('39') && rawPhone.length > 10) ? rawPhone.substring(2) : rawPhone.slice(-10);
+
+          combined.push({
+            firstName: fName,
+            lastName: lName,
+            phone: cleanPhone,
+            phonePrefix: '+39',
+            email: u.email || '',
+            displayPhone: cleanPhone.length >= 9 ? `+39 ${cleanPhone}` : 'Nessun numero'
+          });
+        });
+
+        // 1B. Preleviamo tutti i contatti manuali (La rubrica)
+        contactsSnap.docs.forEach(doc => {
+          const c = doc.data();
+          const rawPhone = (c.phone || '').replace(/\D/g, '');
+          const cleanPhone = (rawPhone.startsWith('39') && rawPhone.length > 10) ? rawPhone.substring(2) : rawPhone.slice(-10);
+
+          combined.push({
+            firstName: c.firstName || '',
+            lastName: c.lastName || '',
+            phone: cleanPhone,
+            phonePrefix: '+39',
+            email: c.email || '',
+            displayPhone: cleanPhone.length >= 9 ? `+39 ${cleanPhone}` : 'Nessun numero'
+          });
+        });
+
+        // 1C. Deduplicazione assoluta e definitiva in base al numero
+        const uniqueMap = new Map();
+        combined.forEach(item => {
+          // Se ha un numero valido, usa il numero per scartare i cloni. Altrimenti usa il nome.
+          const key = item.phone && item.phone.length >= 9 ? item.phone : `${item.firstName.toLowerCase()}_${item.lastName.toLowerCase()}_${Math.random()}`;
+          if (!uniqueMap.has(key)) {
+            uniqueMap.set(key, item);
+          }
+        });
+
+        setGlobalDirectory(Array.from(uniqueMap.values()));
+        setDirectoryLoaded(true);
       } catch (error) {
-        console.error("Error searching contacts:", error);
+        console.error("Errore nel caricamento massivo rubrica:", error);
       }
     };
+    fetchEntireDirectory();
+  }, []);
 
-    const timer = setTimeout(searchContacts, 300);
-    return () => clearTimeout(timer);
-  }, [firstName, lastName]);
+  // 🚀 STEP 2: RICERCA ISTANTANEA (Totalmente slegata da Firebase, fluida come l'acqua)
+  useEffect(() => {
+    if (!directoryLoaded) return; // Aspettiamo che la RAM sia piena
+
+    const searchFirst = firstName.trim().toLowerCase();
+    const searchLast = lastName.trim().toLowerCase();
+
+    if (searchFirst.length < 2) {
+      setSuggestions([]);
+      return;
+    }
+
+    const filtered = globalDirectory.filter(person => {
+      const fullContactName = `${person.firstName} ${person.lastName}`.toLowerCase();
+      
+      // La logica più permissiva e potente del mondo web (.includes)
+      // Non importa se c'è uno spazio, lui trova la corrispondenza esatta dentro la stringa!
+      const matchesFirst = fullContactName.includes(searchFirst);
+      const matchesLast = !searchLast || fullContactName.includes(searchLast);
+
+      return matchesFirst && matchesLast;
+    });
+
+    setSuggestions(filtered.slice(0, 5));
+  }, [firstName, lastName, directoryLoaded, globalDirectory]);
 
   const selectSuggestion = (s: any) => {
     setFirstName(s.firstName);
@@ -1655,8 +1886,13 @@ function ManualBookingModal({ onClose, onSuccess, businessSettings }: ManualBook
       return;
     }
 
-    if (phone.replace(/\D/g, '').length < 10) {
-      alert("Il numero di telefono deve contenere almeno 10 cifre.");
+    const rawPhone = phone.replace(/\D/g, '');
+    const pure10Digits = (rawPhone.startsWith('39') && rawPhone.length > 10) 
+      ? rawPhone.substring(2) 
+      : rawPhone.slice(-10);
+
+    if (pure10Digits.length < 9) {
+      alert("Il numero di telefono deve contenere almeno 9 cifre valide.");
       return;
     }
 
@@ -1664,7 +1900,10 @@ function ManualBookingModal({ onClose, onSuccess, businessSettings }: ManualBook
     const totalDuration = selectedServices.reduce((acc, s) => acc + s.duration, 0);
     const totalAmount = selectedServices.reduce((acc, s) => acc + s.price, 0);
     const endTime = addMinutes(selectedSlot, totalDuration);
-    const fullPhoneNumber = phonePrefix + phone;
+    
+    // Costruiamo i formati
+    const fullPhoneNumber = `+39${pure10Digits}`;
+    const cleanContactPhone = pure10Digits;
 
     try {
       let finalCustomerId = 'manual_entry';
@@ -1675,30 +1914,33 @@ function ManualBookingModal({ onClose, onSuccess, businessSettings }: ManualBook
       const userSnapshot = await getDocs(userQuery);
 
       if (!userSnapshot.empty) {
+        // 🟢 L'UTENTE ESISTE (Niente Rubrica)
         finalCustomerId = userSnapshot.docs[0].id;
         isRegisteredUser = true;
 
-        // 🚀 FIX: Aggiorniamo l'anagrafica reale dell'utente nel DB principale
         await updateDoc(doc(db, 'users', finalCustomerId), {
           displayName: `${firstName} ${lastName}`,
           ...(email ? { email: email } : {}),
           updatedAt: Timestamp.now()
         });
+
+        // Purge: Cancelliamo il contatto in rubrica se c'era
+        try { await deleteDoc(doc(db, 'contacts', cleanContactPhone)); } catch(e) {}
+      } else {
+        // 🟠 L'UTENTE NON ESISTE (Creiamo/Aggiorniamo in Rubrica)
+        await setDoc(doc(db, 'contacts', cleanContactPhone), {
+          firstName,
+          lastName,
+          firstNameLower: firstName.toLowerCase(),
+          lastNameLower: lastName.toLowerCase(),
+          phone: cleanContactPhone,
+          phonePrefix: '+39',
+          email: email || '',
+          updatedAt: Timestamp.now()
+        }, { merge: true });
       }
 
-      // 🚀 FIX: Usiamo il numero di telefono pulito come ID univoco del contatto
-      const contactId = fullPhoneNumber.replace(/\D/g, '');
-      await setDoc(doc(db, 'contacts', contactId), {
-        firstName,
-        lastName,
-        firstNameLower: firstName.toLowerCase(),
-        lastNameLower: lastName.toLowerCase(),
-        phone,
-        phonePrefix,
-        email: email || '',
-        updatedAt: Timestamp.now()
-      }, { merge: true });
-
+      // Creazione Appuntamento
       const q = query(
         collection(db, 'appointments'),
         where('startTime', '==', Timestamp.fromDate(selectedSlot)),
@@ -1708,7 +1950,7 @@ function ManualBookingModal({ onClose, onSuccess, businessSettings }: ManualBook
       for (const d of cancelledSnapshot.docs) {
         await deleteDoc(doc(db, 'appointments', d.id));
       }
-
+      
       const newAppointmentRef = await addDoc(collection(db, 'appointments'), {
         customerId: finalCustomerId,
         customer: {
@@ -1784,7 +2026,7 @@ function ManualBookingModal({ onClose, onSuccess, businessSettings }: ManualBook
               <User size={14} /> Informazioni Cliente
             </h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 relative">
-              <div className="space-y-1.5 relative">
+              <div className="space-y-1.5 relative" ref={searchContainerRef}>
                 <label className="text-xs font-bold text-gray-700 ml-1">Nome *</label>
                 <input 
                   type="text" 
