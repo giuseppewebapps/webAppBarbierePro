@@ -1474,6 +1474,7 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
           onSuccess={() => {
             setIsManualBookingOpen(false);
           }}
+          businessSettings={businessSettings}
         />
       )}
 
@@ -1487,9 +1488,13 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
 interface ManualBookingModalProps {
   onClose: () => void;
   onSuccess: () => void;
+  businessSettings: {
+    openingHours: TimeRange[];
+    closedDays: number[];
+  };
 }
 
-function ManualBookingModal({ onClose, onSuccess }: ManualBookingModalProps) {
+function ManualBookingModal({ onClose, onSuccess, businessSettings }: ManualBookingModalProps) {
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [phonePrefix, setPhonePrefix] = useState('+39');
@@ -1526,16 +1531,24 @@ function ManualBookingModal({ onClose, onSuccess }: ManualBookingModalProps) {
           collection(db, 'contacts'),
           where('firstNameLower', '>=', searchStr),
           where('firstNameLower', '<=', searchStr + '\uf8ff'),
-          limit(5)
+          limit(10) // Aumentato leggermente per permettere la deduplicazione
         );
         const snapshot = await getDocs(q);
         const results = snapshot.docs.map(d => d.data() as any);
         
+        // 1. Filtro per cognome
         const filtered = results.filter(r => 
           !lastName || r.lastNameLower.startsWith(lastName.toLowerCase())
         );
+
+        // 2. 🚀 FIX: Deduplicazione per numero di telefono (SaaS Best Practice)
+        // Crea una mappa usando il numero come chiave, sovrascrivendo i doppioni, poi ri-estrae i valori
+        const uniqueSuggestions = Array.from(
+          new Map(filtered.map(item => [item.phone, item])).values()
+        );
         
-        setSuggestions(filtered);
+        // Prende solo i primi 5 risultati unici
+        setSuggestions(uniqueSuggestions.slice(0, 5));
       } catch (error) {
         console.error("Error searching contacts:", error);
       }
@@ -1560,9 +1573,9 @@ function ManualBookingModal({ onClose, onSuccess }: ManualBookingModalProps) {
       const dateString = format(d, 'yyyy-MM-dd');
       const exception = specialDays.find(ex => ex.date === dateString);
       if (exception) return !exception.isClosed;
-      return !DEFAULT_CLOSED_DAYS.includes(getDay(d));
+      return !businessSettings.closedDays.includes(getDay(d));
     });
-  }, [specialDays]);
+  }, [specialDays, businessSettings]);
 
   useEffect(() => {
     if (selectedDate && selectedServices.length > 0) {
@@ -1570,7 +1583,7 @@ function ManualBookingModal({ onClose, onSuccess }: ManualBookingModalProps) {
     } else {
       setAvailableSlots([]);
     }
-  }, [selectedDate, selectedServices]);
+  }, [selectedDate, selectedServices, businessSettings]);
 
   const calculateSlots = async () => {
     setLoading(true);
@@ -1580,13 +1593,13 @@ function ManualBookingModal({ onClose, onSuccess }: ManualBookingModalProps) {
     const dateString = format(selectedDate, 'yyyy-MM-dd');
     const exceptionForToday = specialDays.find(ex => ex.date === dateString);
 
-    if (exceptionForToday?.isClosed || (!exceptionForToday && DEFAULT_CLOSED_DAYS.includes(getDay(selectedDate)))) {
+    if (exceptionForToday?.isClosed || (!exceptionForToday && businessSettings.closedDays.includes(getDay(selectedDate)))) {
       setAvailableSlots([]);
       setLoading(false);
       return;
     }
 
-    const activeOpeningHours = exceptionForToday?.openingHours || DEFAULT_OPENING_HOURS;
+    const activeOpeningHours = exceptionForToday?.openingHours || businessSettings.openingHours;
 
     try {
       const q = query(
@@ -1664,9 +1677,17 @@ function ManualBookingModal({ onClose, onSuccess }: ManualBookingModalProps) {
       if (!userSnapshot.empty) {
         finalCustomerId = userSnapshot.docs[0].id;
         isRegisteredUser = true;
+
+        // 🚀 FIX: Aggiorniamo l'anagrafica reale dell'utente nel DB principale
+        await updateDoc(doc(db, 'users', finalCustomerId), {
+          displayName: `${firstName} ${lastName}`,
+          ...(email ? { email: email } : {}),
+          updatedAt: Timestamp.now()
+        });
       }
 
-      const contactId = `${firstName.toLowerCase()}_${lastName.toLowerCase()}`;
+      // 🚀 FIX: Usiamo il numero di telefono pulito come ID univoco del contatto
+      const contactId = fullPhoneNumber.replace(/\D/g, '');
       await setDoc(doc(db, 'contacts', contactId), {
         firstName,
         lastName,
