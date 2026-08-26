@@ -324,7 +324,7 @@ export default function App() {
                     <>
                       <input
                         type="text"
-                        placeholder="Il tuo nome (es. Marco)"
+                        placeholder="Nome e Cognome (es. Mario Rossi)"
                         value={name}
                         onChange={(e) => setName(e.target.value)}
                         className="w-full p-4 rounded-2xl border border-gray-200 focus:outline-none focus:border-black transition-colors"
