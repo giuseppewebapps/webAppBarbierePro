@@ -244,21 +244,13 @@ export default function App() {
         updatedAt: Timestamp.now()
       });
 
-      const nameParts = (profile?.displayName || 'Cliente').split(' ');
-      const firstName = nameParts[0] || 'Cliente';
-      const lastName = nameParts.slice(1).join(' ') || '';
-      
-      const contactId = `${firstName.toLowerCase()}_${lastName.toLowerCase()}`;
-      await setDoc(doc(db, 'contacts', contactId), {
-        firstName,
-        lastName,
-        firstNameLower: firstName.toLowerCase(),
-        lastNameLower: lastName.toLowerCase(),
-        phone: cleanPhone,
-        phonePrefix,
+      // 🚀 Lanciamo la sincronizzazione retroattiva ora che abbiamo il numero ufficiale!
+      await autoLinkAppointments({
+        uid: user.uid,
+        displayName: profile?.displayName || 'Cliente',
         email: user.email || '',
-        updatedAt: Timestamp.now()
-      }, { merge: true });
+        phoneNumber: fullPhone
+      });
 
       alert("Numero di telefono salvato con successo!");
       setShowMandatoryPhoneModal(false);
