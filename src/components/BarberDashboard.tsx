@@ -73,6 +73,7 @@ import {
 import { cn } from '../lib/utils';
 import { SpecialDay } from '../types';
 import ScheduleMaintenanceModal from './ScheduleMaintenanceModal';
+import { calculateOptimalSlots } from '../utils/slotEngine';
 
 enum OperationType {
   CREATE = 'create',
@@ -1168,6 +1169,10 @@ const handleSaveCustomerEdits = async () => {
                           const app = itemObj.data as Appointment & { customer?: UserProfile };
                           const duration = (app.endTime.toDate().getTime() - app.startTime.toDate().getTime()) / (1000 * 60);
                           
+                          // 🚀 CALCOLO COMPRESSIONE: Verifichiamo se l'appuntamento ha usato la Flessibilità
+                          const nominalDuration = app.services.reduce((acc, s) => acc + s.duration, 0);
+                          const isCompressed = duration < nominalDuration;
+                          
                           const isMobile = typeof window !== 'undefined' && window.innerWidth < 640;
                           const baseWidth = isMobile ? 7 : 10; 
                           const cardWidth = (duration / 30) * baseWidth; 
@@ -1197,6 +1202,16 @@ const handleSaveCustomerEdits = async () => {
                                 "bg-black text-white" 
                               )}
                             >
+                              {/* 🚀 BADGE FLESSIBILITÀ (Triangolino Giallo) */}
+                              {isCompressed && (
+                                <div 
+                                  className="absolute -top-1.5 -right-1.5 bg-amber-400 text-amber-950 text-[7px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded shadow-sm border border-amber-500 z-10 flex items-center gap-0.5 cursor-help"
+                                  title={`Buco riempito: Servizio compresso da ${nominalDuration} a ${duration} min`}
+                                >
+                                  ⚠️ Flex
+                                </div>
+                              )}
+
                               <div>
                                 <div className="flex justify-between items-start gap-2">
                                   <div className="font-bold text-[11px] sm:text-xs truncate">
@@ -1843,36 +1858,64 @@ const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
         .map(doc => doc.data() as Appointment)
         .filter(app => app.status === 'booked');
 
-      const totalDuration = selectedServices.reduce((acc, s) => acc + s.duration, 0);
-      const slots: Date[] = [];
+      // 🚀 Adapter: Mappatura appuntamenti esistenti con calcolo dello "stato di stress" (isCompressed)
+      const mappedAppointments = dayAppointments.map(app => {
+        const actualDuration = (app.endTime.toDate().getTime() - app.startTime.toDate().getTime()) / 60000;
+        const nominalDuration = app.services.reduce((acc, s) => acc + s.duration, 0);
+        return {
+          start: app.startTime.toDate(),
+          end: app.endTime.toDate(),
+          isCompressed: actualDuration < nominalDuration // true se l'appuntamento è già in modalità "Flex"
+        };
+      });
 
+      // 🚀 Adapter: Mappatura catalogo leggendo la flessibilità REALE dalle costanti
+      const mappedCatalog = SERVICES.map(s => ({
+        id: s.id,
+        duration: s.duration,
+        flexibility: s.flexibility || 0 
+      }));
+
+      // 🚀 Adapter: Somma durata e flessibilità per combo di servizi multipli
+      const totalDuration = selectedServices.reduce((acc, s) => acc + s.duration, 0);
+      const totalFlexibility = selectedServices.reduce((acc, s) => acc + (s.flexibility || 0), 0);
+
+      const requestedService = {
+        id: 'custom_combo',
+        duration: totalDuration,
+        flexibility: totalFlexibility
+      };
+
+      let allValidSlots: Date[] = [];
+
+      // Esecuzione del motore per ogni turno di lavoro della giornata
       activeOpeningHours.forEach(range => {
         const startHour = Math.floor(range.start);
         const startMin = Math.round((range.start - startHour) * 60);
-        let current = setMinutes(setHours(dayStart, startHour), startMin);
+        const shiftStart = setMinutes(setHours(dayStart, startHour), startMin);
 
         const endHour = Math.floor(range.end);
         const endMin = Math.round((range.end - endHour) * 60);
-        const rangeEnd = setMinutes(setHours(dayStart, endHour), endMin);
+        const shiftEnd = setMinutes(setHours(dayStart, endHour), endMin);
 
-        while (!isAfter(addMinutes(current, totalDuration), rangeEnd)) {
-          if (isAfter(current, new Date())) {
-            const slotEnd = addMinutes(current, totalDuration);
-            const isOverlap = dayAppointments.some(app => {
-              const appStart = app.startTime.toDate();
-              const appEnd = app.endTime.toDate();
-              return (current < appEnd && slotEnd > appStart);
-            });
+        const shiftSlots = calculateOptimalSlots(
+          requestedService,
+          mappedCatalog,
+          mappedAppointments,
+          { start: shiftStart, end: shiftEnd }
+        );
 
-            if (!isOverlap) {
-              slots.push(new Date(current));
-            }
-          }
-          current = addMinutes(current, 15);
-        }
+        allValidSlots = [...allValidSlots, ...shiftSlots];
       });
 
-      setAvailableSlots(slots);
+      // Ordinamento cronologico finale e deduplicazione
+      const uniqueSortedSlots = Array.from(new Set(allValidSlots.map(d => d.getTime())))
+        .map(time => new Date(time))
+        .sort((a, b) => a.getTime() - b.getTime());
+
+      // Filtra slot passati se la data selezionata è oggi
+      const now = new Date();
+      setAvailableSlots(uniqueSortedSlots.filter(slot => isAfter(slot, now)));
     } catch (error) {
       console.error("Error calculating slots:", error);
     } finally {
@@ -1899,8 +1942,44 @@ const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
     setLoading(true);
     const totalDuration = selectedServices.reduce((acc, s) => acc + s.duration, 0);
     const totalAmount = selectedServices.reduce((acc, s) => acc + s.price, 0);
-    const endTime = addMinutes(selectedSlot, totalDuration);
     
+    // 🚀 CALCOLO DURATA COMPRESSA REALE
+    const dayStart = startOfDay(selectedSlot);
+    const dayEnd = endOfDay(selectedSlot);
+    
+    // Scarichiamo gli appuntamenti per trovare gli ostacoli (usiamo direttamente il DB per sicurezza massima)
+    const qDay = query(
+      collection(db, 'appointments'),
+      where('startTime', '>=', Timestamp.fromDate(dayStart)),
+      where('startTime', '<=', Timestamp.fromDate(dayEnd)),
+      where('status', '==', 'booked')
+    );
+    const daySnap = await getDocs(qDay);
+    const dayApps = daySnap.docs.map(d => d.data() as Appointment).sort((a, b) => a.startTime.toMillis() - b.startTime.toMillis());
+
+    // Troviamo la fine del turno
+    const dateString = format(selectedSlot, 'yyyy-MM-dd');
+    const exception = specialDays.find(ex => ex.date === dateString);
+    const activeHours = exception?.openingHours || businessSettings.openingHours;
+    let shiftEnd = dayEnd;
+    for (const range of activeHours) {
+      const eH = Math.floor(range.end);
+      const eM = Math.round((range.end - eH) * 60);
+      const currentShiftEnd = setMinutes(setHours(dayStart, eH), eM);
+      if (isAfter(currentShiftEnd, selectedSlot)) {
+        shiftEnd = currentShiftEnd;
+        break;
+      }
+    }
+
+    // Calcoliamo il vero endTime
+    const nextApp = dayApps.find(a => a.startTime.toMillis() > selectedSlot.getTime());
+    const obstacleTime = nextApp && isBefore(nextApp.startTime.toDate(), shiftEnd) ? nextApp.startTime.toDate() : shiftEnd;
+    
+    const availableMins = (obstacleTime.getTime() - selectedSlot.getTime()) / 60000;
+    const actualDuration = Math.min(totalDuration, availableMins);
+    const endTime = addMinutes(selectedSlot, actualDuration);
+
     // Costruiamo i formati
     const fullPhoneNumber = `+39${pure10Digits}`;
     const cleanContactPhone = pure10Digits;

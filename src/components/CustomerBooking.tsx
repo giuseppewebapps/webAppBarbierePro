@@ -60,6 +60,7 @@ import {
   SALON_INFO 
 } from '../constants';
 import { Appointment, Service, RescheduleProposal, SpecialDay, TimeRange } from '../types';
+import { calculateOptimalSlots } from '../utils/slotEngine';
 
 enum OperationType {
   CREATE = 'create',
@@ -203,24 +204,31 @@ export default function CustomerBooking({
   const [selectedServices, setSelectedServices] = useState<Service[]>([]);
   const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
   
-  const next7Days = useMemo(() => {
+// 🚀 1. Limiti Assoluti di Prenotazione (150 giorni)
+  const MAX_BOOKING_DAYS = 150;
+  const todayNormalized = startOfDay(new Date());
+  const maxBookingDate = addDays(todayNormalized, MAX_BOOKING_DAYS);
+
+  // 🚀 2. Stato per gestire "L'inizio" della finestra visibile
+  const [windowStart, setWindowStart] = useState<Date>(todayNormalized);
+
+  // 🚀 3. Finestra Scorrevole (Genera SEMPRE E SOLO 14 giorni alla volta)
+  const visibleDays = useMemo(() => {
     const days = eachDayOfInterval({
-      start: new Date(),
-      end: addDays(new Date(), 30)
+      start: windowStart,
+      end: addDays(windowStart, 14)
     });
     
     return days.filter(d => {
+      if (isAfter(d, maxBookingDate)) return false; // Sicurezza: Mai oltre i 150 giorni
       const dateString = format(d, 'yyyy-MM-dd');
       const exception = specialDays.find(ex => ex.date === dateString);
-      
-      if (exception) {
-        return !exception.isClosed;
-      }
+      if (exception) return !exception.isClosed;
       return !businessSettings.closedDays.includes(getDay(d));
     });
-  }, [specialDays, businessSettings]);
+  }, [windowStart, specialDays, businessSettings, maxBookingDate]);
 
-  const [selectedDate, setSelectedDate] = useState<Date>(next7Days[0] || new Date());
+  const [selectedDate, setSelectedDate] = useState<Date>(visibleDays[0] || todayNormalized);
   const [availableSlots, setAvailableSlots] = useState<Date[]>([]);
   const [selectedSlot, setSelectedSlot] = useState<Date | null>(null);
   
@@ -382,7 +390,7 @@ export default function CustomerBooking({
     setLoading(true);
     const dayStart = startOfDay(selectedDate);
     const dayEnd = endOfDay(selectedDate);
-    
+
     const dateString = format(selectedDate, 'yyyy-MM-dd');
     const exceptionForToday = specialDays.find(ex => ex.date === dateString);
 
@@ -405,37 +413,64 @@ export default function CustomerBooking({
         .map(doc => doc.data() as Appointment)
         .filter(app => app.status === 'booked');
 
-      const totalDuration = selectedServices.reduce((acc, s) => acc + s.duration, 0);
-      const slots: Date[] = [];
+      // Adapter: Mappatura appuntamenti esistenti con calcolo dello "stato di stress" (isCompressed)
+      const mappedAppointments = dayAppointments.map(app => {
+        const actualDuration = (app.endTime.toDate().getTime() - app.startTime.toDate().getTime()) / 60000;
+        const nominalDuration = app.services.reduce((acc, s) => acc + s.duration, 0);
+        return {
+          start: app.startTime.toDate(),
+          end: app.endTime.toDate(),
+          isCompressed: actualDuration < nominalDuration // true se l'appuntamento è già in modalità "Flex"
+        };
+      });
 
+      // 🚀 Adapter: Mappatura catalogo leggendo la flessibilità REALE dalle costanti
+      const mappedCatalog = SERVICES.map(s => ({
+        id: s.id,
+        duration: s.duration,
+        flexibility: s.flexibility || 0 
+      }));
+
+      // 🚀 Adapter: Somma durata e flessibilità per combo di servizi multipli
+      const totalDuration = selectedServices.reduce((acc, s) => acc + s.duration, 0);
+      const totalFlexibility = selectedServices.reduce((acc, s) => acc + (s.flexibility || 0), 0);
+
+      const requestedService = {
+        id: 'custom_combo',
+        duration: totalDuration,
+        flexibility: totalFlexibility
+      };
+
+      let allValidSlots: Date[] = [];
+
+      // Esecuzione del motore per ogni turno di lavoro della giornata
       activeOpeningHours.forEach(range => {
         const startHour = Math.floor(range.start);
         const startMin = Math.round((range.start - startHour) * 60);
-        let current = setMinutes(setHours(dayStart, startHour), startMin);
+        const shiftStart = setMinutes(setHours(dayStart, startHour), startMin);
 
         const endHour = Math.floor(range.end);
         const endMin = Math.round((range.end - endHour) * 60);
-        const rangeEnd = setMinutes(setHours(dayStart, endHour), endMin);
+        const shiftEnd = setMinutes(setHours(dayStart, endHour), endMin);
 
-        while (!isAfter(addMinutes(current, totalDuration), rangeEnd)) {
-          if (isAfter(current, new Date())) {
-            const slotEnd = addMinutes(current, totalDuration);
-            
-            const isOverlapApp = dayAppointments.some(app => {
-              const appStart = app.startTime.toDate();
-              const appEnd = app.endTime.toDate();
-              return (current < appEnd && slotEnd > appStart);
-            });
+        const shiftSlots = calculateOptimalSlots(
+          requestedService,
+          mappedCatalog,
+          mappedAppointments,
+          { start: shiftStart, end: shiftEnd }
+        );
 
-            if (!isOverlapApp) {
-              slots.push(new Date(current));
-            }
-          }
-          current = addMinutes(current, 15);
-        }
+        allValidSlots = [...allValidSlots, ...shiftSlots];
       });
 
-      setAvailableSlots(slots);
+      // Ordinamento cronologico finale
+      const uniqueSortedSlots = Array.from(new Set(allValidSlots.map(d => d.getTime())))
+        .map(time => new Date(time))
+        .sort((a, b) => a.getTime() - b.getTime());
+
+      // Filtra slot passati se la data selezionata è oggi
+      const now = new Date();
+      setAvailableSlots(uniqueSortedSlots.filter(slot => isAfter(slot, now)));
     } catch (error) {
       handleFirestoreError(error, OperationType.LIST, 'appointments');
     } finally {
@@ -489,21 +524,50 @@ export default function CustomerBooking({
     
     const totalDuration = selectedServices.reduce((acc, s) => acc + s.duration, 0);
     const totalAmount = selectedServices.reduce((acc, s) => acc + s.price, 0);
-    const endTime = addMinutes(selectedSlot, totalDuration);
+    
+    const dayStart = startOfDay(selectedSlot);
+    const dayEnd = endOfDay(selectedSlot);
 
-    try {
-      const qExisting = query(
+   try {
+      // 1. Scarichiamo gli appuntamenti del giorno per trovare gli ostacoli
+      const qDay = query(
         collection(db, 'appointments'),
-        where('startTime', '==', Timestamp.fromDate(selectedSlot)),
+        where('startTime', '>=', Timestamp.fromDate(dayStart)),
+        where('startTime', '<=', Timestamp.fromDate(dayEnd)),
         where('status', '==', 'booked')
       );
-      
-      const existingSnapshot = await getDocs(qExisting);
-      if (!existingSnapshot.empty) {
-        alert("Prenotazione non riuscita: questo slot è già stato prenotato da un altro cliente. La pagina verrà ricaricata.");
+      const daySnap = await getDocs(qDay);
+      const dayApps = daySnap.docs.map(d => d.data() as Appointment).sort((a, b) => a.startTime.toMillis() - b.startTime.toMillis());
+
+      // 2. Anti-doppia prenotazione
+      if (dayApps.some(a => a.startTime.toMillis() === selectedSlot.getTime())) {
+        alert("Prenotazione non riuscita: questo slot è già stato prenotato. La pagina verrà ricaricata.");
         window.location.reload();
         return;
       }
+
+      // 3. Troviamo la fine del turno
+      const dateString = format(selectedSlot, 'yyyy-MM-dd');
+      const exception = specialDays.find(ex => ex.date === dateString);
+      const activeHours = exception?.openingHours || businessSettings.openingHours;
+      let shiftEnd = dayEnd;
+      for (const range of activeHours) {
+        const eH = Math.floor(range.end);
+        const eM = Math.round((range.end - eH) * 60);
+        const currentShiftEnd = setMinutes(setHours(dayStart, eH), eM);
+        if (isAfter(currentShiftEnd, selectedSlot)) {
+          shiftEnd = currentShiftEnd;
+          break;
+        }
+      }
+
+      // 4. Calcoliamo il vero endTime basandoci sullo spazio disponibile
+      const nextApp = dayApps.find(a => a.startTime.toMillis() > selectedSlot.getTime());
+      const obstacleTime = nextApp && isBefore(nextApp.startTime.toDate(), shiftEnd) ? nextApp.startTime.toDate() : shiftEnd;
+      
+      const availableMins = (obstacleTime.getTime() - selectedSlot.getTime()) / 60000;
+      const actualDuration = Math.min(totalDuration, availableMins);
+      const endTime = addMinutes(selectedSlot, actualDuration);
 
       const qCancelled = query(
         collection(db, 'appointments'),
@@ -1141,9 +1205,9 @@ export default function CustomerBooking({
                 </div>
 
                 <div className="hidden sm:flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
-                  {next7Days.map(date => (
+                  {visibleDays.map(date => (
                     <button
-                      key={date.toISOString()}
+                      key={date.getTime()}
                       onClick={() => { setSelectedDate(date); setSelectedSlot(null); }}
                       className={`flex-shrink-0 w-20 py-4 rounded-2xl border transition-all flex flex-col items-center gap-1 ${
                         isSameDay(date, selectedDate)
@@ -1159,16 +1223,16 @@ export default function CustomerBooking({
 
                 <div className="sm:hidden relative">
                   <select
-                    value={selectedDate.toISOString()}
+                    value={selectedDate.getTime().toString()}
                     onChange={(e) => {
-                      const date = new Date(e.target.value);
+                      const date = new Date(parseInt(e.target.value));
                       setSelectedDate(date);
                       setSelectedSlot(null);
                     }}
                     className="w-full p-4 bg-white border border-gray-400 rounded-2xl font-bold appearance-none focus:border-black outline-none"
                   >
-                    {next7Days.map(date => (
-                      <option key={date.toISOString()} value={date.toISOString()}>
+                    {visibleDays.map(date => (
+                      <option key={date.getTime()} value={date.getTime().toString()}>
                         {format(date, 'EEEE d MMMM', { locale: it })}
                       </option>
                     ))}
@@ -1554,12 +1618,23 @@ export default function CustomerBooking({
                 selected={selectedDate}
                 onSelect={(date) => {
                   if (date) {
-                    setSelectedDate(date);
+                    const normalizedDate = startOfDay(date);
+                    setSelectedDate(normalizedDate);
+                    setWindowStart(normalizedDate);
                     setSelectedSlot(null);
                     setShowCalendar(false);
                   }
                 }}
-                disabled={{ before: new Date() }}
+                disabled={[
+                  { before: todayNormalized, after: maxBookingDate }, 
+                  (date) => {
+                    // Disabilita dinamicamente ferie e domeniche nel calendario
+                    const dateString = format(date, 'yyyy-MM-dd');
+                    const exception = specialDays.find(ex => ex.date === dateString);
+                    if (exception) return exception.isClosed;
+                    return businessSettings.closedDays.includes(getDay(date));
+                  }
+                ]}
                 locale={it}
                 className="border-none"
                 modifiersClassNames={{

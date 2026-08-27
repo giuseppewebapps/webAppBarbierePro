@@ -2,32 +2,36 @@ import { Service } from './types';
 
 export const SERVICES: Service[] = [
   { 
-    id: 'taglio', 
-    name: 'Taglio e shampoo', 
-    description: 'Taglio su misura con lavaggio e rifinitura, per un look sempre curato e definito.',
-    price: 18, 
-    duration: 45 
-  },
-  { 
     id: 'barba', 
     name: 'Taglio, shampoo e barba', 
     description: 'Pacchetto relax: shampoo, taglio personalizzato e rifinitura barba per uno stile impeccabile.',
     price: 25, 
-    duration: 60 
+    duration: 60,
+    flexibility: 15 
+  },
+  { 
+    id: 'taglio', 
+    name: 'Taglio e shampoo', 
+    description: 'Taglio su misura con lavaggio e rifinitura, per un look sempre curato e definito.',
+    price: 18, 
+    duration: 45,
+    flexibility: 15 
   },
   { 
     id: 'solo_barba', 
     name: 'Barba', 
     description: 'Rasatura completa o rifinitura sagomata per una barba ordinata, precisa e sempre valorizzata.',
     price: 10, 
-    duration: 20 
+    duration: 20,
+    flexibility: 5 
   },
   { 
     id: 'shampoo', 
     name: 'Shampoo e acconciatura', 
     description: 'Lavaggio, asciugatura e styling su misura. Perfetto per capelli curati in ogni occasione.*Prezzo variabile',
     price: 10, 
-    duration: 15 
+    duration: 15,
+    flexibility: 5  
   }
 ];
 

@@ -14,6 +14,7 @@ export interface Service {
   description?: string;
   price: number;
   duration: number; // in minutes
+  flexibility?: number;
 }
 
 export interface Appointment {
