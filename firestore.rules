@@ -2,176 +2,79 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     
-    // ===============================================================
-    // Helper Functions
-    // ===============================================================
-    function isAuthenticated() {
-      return request.auth != null;
-    }
-    
-    function isOwner(userId) {
-      return isAuthenticated() && request.auth.uid == userId;
-    }
-    
+    function isAuthenticated() { return request.auth != null; }
+    function isOwner(userId) { return isAuthenticated() && request.auth.uid == userId; }
     function isAdmin() {
       return isAuthenticated() && (
-          request.auth.token.email == 'eaglewealth.fs@gmail.com' ||
-          request.auth.token.email == 'malderadomenico98@gmail.com' ||
+        request.auth.token.email in ['eaglewealth.fs@gmail.com', 'malderadomenico98@gmail.com', 'do.maldera@libero.it'] ||
         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'barber')
       );
     }
 
-    function isRecent(time) {
-      return time > request.time - duration.value(5, 'm') && time < request.time + duration.value(5, 'm');
-    }
-
-    // ===============================================================
-    // Validation Functions
-    // ===============================================================
-
     function isValidUser(data) {
-      return data.keys().hasAll(['uid', 'email', 'role']) &&
-             data.uid is string &&
-             data.email is string &&
-             data.role in ['barber', 'customer'] &&
-             (!('displayName' in data) || data.displayName is string) &&
-             (!('phoneNumber' in data) || data.phoneNumber is string);
+      return data.keys().hasAll(['uid', 'email', 'role']) && data.uid is string &&
+             data.email is string && data.role in ['barber', 'customer'];
     }
 
     function isValidAppointment(data) {
       return data.keys().hasAll(['customerId', 'services', 'startTime', 'endTime', 'status', 'totalAmount', 'createdAt']) &&
-             data.customerId is string &&
-             data.services is list &&
-             data.status in ['booked', 'cancelled', 'completed'] &&
-             data.totalAmount is number &&
-             (!('isForFriend' in data) || data.isForFriend is bool) &&
-             (!('isManual' in data) || data.isManual is bool) &&
-             (!('cancelledAt' in data) || data.cancelledAt is timestamp) &&
-             (!('cancelledBy' in data) || data.cancelledBy is string) &&
-             (!('customer' in data) || (
-               data.customer is map &&
-               data.customer.keys().hasAll(['displayName', 'phoneNumber'])
-             )) &&
-             (!('friendDetails' in data) || (
-               data.friendDetails is map &&
-               data.friendDetails.keys().hasAll(['firstName', 'lastName', 'phone', 'email'])
-             ));
+             data.customerId is string && data.status in ['booked', 'cancelled', 'completed'];
     }
 
     function isValidContact(data) {
-      return data.firstName is string && 
-             data.lastName is string && 
-             data.phone is string;
+      return data.firstName is string && data.lastName is string && data.phone is string;
     }
 
     function isValidNotification(data) {
-      return data.userId is string &&
-             data.title is string &&
-             data.message is string &&
-             data.type in ['cancellation', 'booking', 'reschedule_proposal', 'manual_management_required', 'proposal_declined'] &&
-             data.read is bool &&
-             (!('appointmentId' in data) || data.appointmentId is string) &&
-             (!('proposalId' in data) || data.proposalId is string) &&
-             (!('declinedDetails' in data) || data.declinedDetails is map);
+      return data.userId is string && data.type in ['cancellation', 'booking', 'reschedule_proposal', 'manual_management_required', 'proposal_declined'];
     }
 
-    // ===============================================================
-    // Rules
-    // ===============================================================
-    // Regola per la collezione settings
     match /settings/{settingId} {
-      // Permetti la lettura a qualsiasi utente autenticato
-      allow read: if request.auth != null;
-  
-      // Permetti la scrittura solo agli utenti autenticati (oppure agli admin/barbieri)
-      allow write: if request.auth != null;
-    }
-
-    match /users/{userId} {
-      allow read: if request.auth != null;
-      allow create: if request.auth != null;
-      
-      allow update: if request.auth != null; 
-      allow delete: if request.auth != null && request.auth.uid == userId;
-    }
-
-    match /contacts/{contactId} {
       allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && isValidContact(request.resource.data);
-      allow update: if isAuthenticated() && isValidContact(request.resource.data);
-      allow delete: if isAuthenticated();
+      allow write: if isAdmin();
     }
 
     match /users/{userId} {
       allow read: if isAuthenticated();
       allow create: if isOwner(userId) && isValidUser(request.resource.data);
-      allow update: if isOwner(userId) && isValidUser(request.resource.data) && 
-                      (request.resource.data.role == resource.data.role || isAdmin());
+      allow update: if isOwner(userId) && isValidUser(request.resource.data) && (request.resource.data.role == resource.data.role || isAdmin());
       allow delete: if isAdmin();
     }
 
+    match /contacts/{contactId} {
+      allow read, write, delete: if isAdmin();
+    }
+
     match /appointments/{appointmentId} {
-      allow read: if isAuthenticated();
+      allow read: if isAuthenticated(); 
       allow create: if isAuthenticated() && isValidAppointment(request.resource.data);
       allow update: if isAuthenticated() && (
         isAdmin() || 
-        // 1. Modifica standard: l'appuntamento è già del cliente
         (resource.data.customerId == request.auth.uid && isValidAppointment(request.resource.data)) ||
-
-        // Il cliente assorbe un appuntamento orfano sovrascrivendo 'manual_entry' col proprio UID
         (resource.data.customerId == 'manual_entry' && request.resource.data.customerId == request.auth.uid)
       );
-      allow delete: if isAdmin() ||
-               (isAuthenticated() && resource.data.status == 'cancelled') ||
-               (isAuthenticated() && resource.data.customerId == request.auth.uid);
+      allow delete: if isAdmin() || (isAuthenticated() && resource.data.status == 'cancelled') || (isAuthenticated() && resource.data.customerId == request.auth.uid);
     }
 
     match /notifications/{notificationId} {
-      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow read, update: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
       allow create: if isAuthenticated() && isValidNotification(request.resource.data);
-      allow update: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
-      allow delete: if isAuthenticated() && (
-        resource.data.userId == request.auth.uid || 
-        isAdmin() ||
-        (resource.data.type == 'reschedule_proposal' && 
-         (!exists(/databases/$(database)/documents/rescheduleProposals/$(resource.data.proposalId)) ||
-          get(/databases/$(database)/documents/rescheduleProposals/$(resource.data.proposalId)).data.status == 'completed'))
-      );
+      allow delete: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
     }
 
     match /rescheduleProposals/{proposalId} {
       allow read, write: if isAuthenticated();
     }
 
-    match /contacts/{contactId} {
-      allow read: if isAdmin();
-      allow write: if isAdmin() && isValidContact(request.resource.data);
-    }
-
-    // REGOLE PER LA SCATOLA NERA (ERROR LOGS)
     match /system_logs/{logId} {
-      // 1. Qualsiasi utente loggato può CREARE un log di errore
-      allow create: if request.auth != null;
-      
-      // 2. Solo i barbieri possono LEGGERE o CANCELLARE i log
-      allow read, update, delete: if request.auth != null && 
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'barber';
+      allow create: if isAuthenticated();
+      allow read, update, delete: if isAdmin();
     }
 
-    // ===============================================================
-    // NUOVE REGOLE: ECCEZIONI DEL CALENDARIO
-    // ===============================================================
     match /calendar_exceptions/{exceptionDate} {
-      allow read: if true; // Tutti possono leggere se il negozio è aperto o chiuso
-      allow write: if isAdmin(); // Solo i barbieri (o admin) possono modificare
-    }
-
-    // REGOLE PER LE IMPOSTAZIONI ORARIO
-    match /settings/{settingId} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null && 
-        (request.auth.token.email in ['do.maldera@libero.it', 'eaglewealth.fs@gmail.com', 'malderadomenico98@gmail.com']);
+      allow read: if true;
+      allow write: if isAdmin();
     }
 
     match /test/connection {

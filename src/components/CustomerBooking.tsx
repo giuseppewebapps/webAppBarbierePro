@@ -204,10 +204,15 @@ export default function CustomerBooking({
   const [selectedServices, setSelectedServices] = useState<Service[]>([]);
   const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
   
-// 🚀 1. Limiti Assoluti di Prenotazione (150 giorni)
+// 🚀 1. Limiti Assoluti di Prenotazione (150 giorni) - CONGELATI IN RAM
   const MAX_BOOKING_DAYS = 150;
-  const todayNormalized = startOfDay(new Date());
-  const maxBookingDate = addDays(todayNormalized, MAX_BOOKING_DAYS);
+  const { todayNormalized, maxBookingDate } = useMemo(() => {
+    const today = startOfDay(new Date());
+    return {
+      todayNormalized: today,
+      maxBookingDate: addDays(today, MAX_BOOKING_DAYS)
+    };
+  }, []); // L'array vuoto garantisce che venga calcolato 1 sola volta al mount
 
   // 🚀 2. Stato per gestire "L'inizio" della finestra visibile
   const [windowStart, setWindowStart] = useState<Date>(todayNormalized);
@@ -866,10 +871,17 @@ export default function CustomerBooking({
         }
 
         const myApp = appDoc.data() as Appointment;
-        const duration = (myApp.endTime.toDate().getTime() - myApp.startTime.toDate().getTime());
-        
         const newStartTime = currentTarget.proposedStartTime ? currentTarget.proposedStartTime.toDate() : freshProposal.gapStartTime.toDate();
-        const newEndTime = new Date(newStartTime.getTime() + duration);
+        
+        // 🚀 APPLICAZIONE DECOMPRESSIONE: Se la proposta contiene la fine (Shift intelligente), usala!
+        let newEndTime: Date;
+        if (currentTarget.proposedEndTime) {
+          newEndTime = currentTarget.proposedEndTime.toDate();
+        } else {
+          // Fallback legacy per retrocompatibilità
+          const duration = (myApp.endTime.toDate().getTime() - myApp.startTime.toDate().getTime());
+          newEndTime = new Date(newStartTime.getTime() + duration);
+        }
 
         await updateDoc(doc(db, 'appointments', currentTarget.appointmentId), {
           startTime: Timestamp.fromDate(newStartTime),
@@ -1027,6 +1039,31 @@ export default function CustomerBooking({
       setLoading(false);
     }
   };
+
+  // 🚀 MEMOIZZAZIONE REGOLE CALENDARIO (Evita Crash + Fix Aperture Straordinarie)
+  const disabledDays = useMemo(() => {
+    return [
+      { before: todayNormalized, after: maxBookingDate },
+      (date: Date) => {
+        const dateString = format(date, 'yyyy-MM-dd');
+        
+        // 1. Controllo Eccezioni (Ferie o APERTURE STRAORDINARIE)
+        const exception = specialDays.find(ex => ex.date === dateString);
+        if (exception) {
+          // Se è un'eccezione aperta (isClosed: false), restituisce false e lo rende cliccabile
+          return exception.isClosed; 
+        }
+        
+        // 2. Controllo giorni di chiusura standard (es. Domenica e Lunedì)
+        if (businessSettings.closedDays.includes(getDay(date))) return true;
+        
+        // 3. Controllo giorni completamente pieni
+        if (fullyBookedDays.includes(dateString)) return true;
+        
+        return false;
+      }
+    ];
+  }, [todayNormalized, maxBookingDate, specialDays, businessSettings, fullyBookedDays]);
 
   const upcomingAppointments = myAppointments
     .filter(a => (a.status === 'booked' || a.status === 'cancelled') && a.startTime.toDate() > new Date())
@@ -1736,21 +1773,7 @@ export default function CustomerBooking({
                     setShowCalendar(false);
                   }
                 }}
-                disabled={[
-                  { before: todayNormalized, after: maxBookingDate }, 
-                  (date) => {
-                    const dateString = format(date, 'yyyy-MM-dd');
-                    // 1. Blocca ferie
-                    const exception = specialDays.find(ex => ex.date === dateString);
-                    if (exception && exception.isClosed) return true;
-                    // 2. Blocca giorni di ordinaria chiusura
-                    if (businessSettings.closedDays.includes(getDay(date))) return true;
-                    // 3. 🚀 BLOCCA I GIORNI TOTALMENTE PIENI
-                    if (fullyBookedDays.includes(dateString)) return true; 
-                    
-                    return false;
-                  }
-                ]}
+                disabled={disabledDays}
                 locale={it}
                 className="border-none"
                 modifiersClassNames={{

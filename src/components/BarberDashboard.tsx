@@ -192,6 +192,7 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
   }, []);
 
   const [sendingProposal, setSendingProposal] = useState(false);
+  const [shiftConfirm, setShiftConfirm] = useState<{app: Appointment & { customer?: UserProfile }, direction: 'anticipo' | 'posticipo'} | null>(null);
   const [currentTime, setCurrentTime] = useState(new Date());
 
   useEffect(() => {
@@ -654,6 +655,67 @@ const handleSaveCustomerEdits = async () => {
       });
 
       setGapWizardStep(3);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'rescheduleProposals');
+    } finally {
+      setSendingProposal(false);
+    }
+  };
+
+  // 🚀 MOTORE DI TRASLAZIONE E DECOMPRESSIONE DINAMICA
+  const handleShiftProposal = async () => {
+    if (!showGapFiller || !shiftConfirm) return;
+    const { app: candidateApp, direction } = shiftConfirm;
+    
+    setSendingProposal(true);
+    try {
+      const nominalDuration = candidateApp.services.reduce((acc, s) => acc + s.duration, 0);
+      let newStart: Date, newEnd: Date;
+
+      if (direction === 'anticipo') {
+        newStart = showGapFiller.start; 
+        newEnd = addMinutes(newStart, nominalDuration); 
+      } else {
+        newEnd = showGapFiller.end;
+        newStart = addMinutes(newEnd, -nominalDuration); 
+      }
+
+      const proposalData: Partial<RescheduleProposal> = {
+        gapStartTime: Timestamp.fromDate(showGapFiller.start),
+        gapEndTime: Timestamp.fromDate(showGapFiller.end),
+        gapAppointmentId: showGapFiller.appointmentId || '',
+        targets: [{
+          userId: candidateApp.customerId,
+          appointmentId: candidateApp.id!,
+          status: 'pending',
+          notifiedAt: Timestamp.now(),
+          expiresAt: Timestamp.fromDate(addMinutes(new Date(), 15)),
+          proposedStartTime: Timestamp.fromDate(newStart),
+          proposedEndTime: Timestamp.fromDate(newEnd)
+        }],
+        currentIdx: 0,
+        status: 'active',
+        createdAt: Timestamp.now()
+      };
+
+      const proposalRef = await addDoc(collection(db, 'rescheduleProposals'), proposalData);
+
+      await addDoc(collection(db, 'notifications'), {
+        userId: candidateApp.customerId,
+        title: 'Proposta di Cambio Orario',
+        message: `Il barbiere ti chiede se puoi ${direction === 'anticipo' ? 'anticipare' : 'posticipare'} il tuo appuntamento alle ore ${format(newStart, 'HH:mm')}. Hai 15 minuti per accettare!`,
+        type: 'reschedule_proposal',
+        read: false,
+        createdAt: Timestamp.now(),
+        proposalId: proposalRef.id,
+        appointmentId: candidateApp.id
+      });
+
+      setShiftConfirm(null);
+      setGapWizardStep(3);
+      setSelectedCandidates([candidateApp.id!]);
+      setRescheduleCandidates([candidateApp]);
+      setGapPlacements({ [candidateApp.id!]: newStart });
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'rescheduleProposals');
     } finally {
@@ -1183,6 +1245,10 @@ const handleSaveCustomerEdits = async () => {
                           const isSelected = selectedCandidates.includes(app.id!);
                           const selectionMode = showGapFiller !== null;
 
+                          // 🚀 RILEVAMENTO ADIACENZA (Shift Scope)
+                          const isAdjacentNext = selectionMode && Math.abs(app.startTime.toDate().getTime() - showGapFiller!.end.getTime()) < 60000;
+                          const isAdjacentPrev = selectionMode && Math.abs(app.endTime.toDate().getTime() - showGapFiller!.start.getTime()) < 60000;
+
                           return (
                             <div 
                               key={app.id} 
@@ -1196,14 +1262,30 @@ const handleSaveCustomerEdits = async () => {
                               }}
                               style={{ width: `${cardWidth}rem`, maxWidth: '85vw' }}
                               className={cn(
-                                "flex-shrink-0 p-2 sm:p-2.5 rounded-xl shadow-md flex flex-col justify-between text-left transition-all cursor-pointer relative min-h-[76px] sm:h-[88px] duration-500",
+                                "flex-shrink-0 p-2 sm:p-2.5 rounded-xl shadow-md flex flex-col justify-between text-left transition-all cursor-pointer relative min-h-[76px] sm:h-[88px] duration-500 overflow-hidden group",
                                 app.id === highlightedAppId ? "ring-4 ring-emerald-500 shadow-[0_0_30px_rgba(16,185,129,0.6)] scale-[1.05] z-20" : "hover:scale-[1.02]",
-                                selectionMode && !isCandidate ? "bg-gray-100 text-gray-400 grayscale shadow-none border-gray-200" :
+                                selectionMode && !isCandidate && !isAdjacentNext && !isAdjacentPrev ? "bg-gray-100 text-gray-400 grayscale shadow-none border-gray-200 opacity-50" :
                                 isSelected ? "bg-emerald-500 text-white ring-4 ring-emerald-500/30" :
                                 (app.status === 'completed' || (app.status === 'booked' && isBefore(app.endTime.toDate(), currentTime))) ? "bg-emerald-600 text-white" :
                                 "bg-black text-white" 
                               )}
                             >
+                              {/* 🚀 OVERLAY AZIONE RAPIDA DECOMPRESSIONE */}
+                              {(isAdjacentNext || isAdjacentPrev) && !sendingProposal && (
+                                <button 
+                                  onClick={(e) => { 
+                                    e.stopPropagation(); 
+                                    setShiftConfirm({app, direction: isAdjacentNext ? 'anticipo' : 'posticipo'}); 
+                                  }}
+                                  className="absolute inset-0 bg-blue-600/95 backdrop-blur-sm text-white flex flex-col items-center justify-center gap-1 z-30 opacity-0 group-hover:opacity-100 transition-opacity"
+                                >
+                                  <ArrowUpCircle size={20} className={isAdjacentPrev ? "rotate-180" : ""} />
+                                  <span className="text-[10px] sm:text-xs font-bold uppercase tracking-wider">
+                                    Chiedi {isAdjacentNext ? 'Anticipo' : 'Posticipo'}
+                                  </span>
+                                </button>
+                              )}
+
                               {/* 🚀 BADGE FLESSIBILITÀ (Triangolino Giallo) */}
                               {isCompressed && (
                                 <div 
@@ -1522,6 +1604,37 @@ const handleSaveCustomerEdits = async () => {
         </div>
       )}
 
+      {/* Shift Confirmation Modal */}
+      {shiftConfirm && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[110] p-4 animate-in fade-in">
+          <div className="bg-white/95 backdrop-blur-xl w-full max-w-md rounded-[32px] p-8 shadow-2xl border border-white/20 text-center animate-in zoom-in-95">
+            <div className="w-16 h-16 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-6">
+              <ArrowUpCircle size={32} className={shiftConfirm.direction === 'posticipo' ? "rotate-180" : ""} />
+            </div>
+            <h3 className="text-2xl font-bold mb-2">Conferma {shiftConfirm.direction === 'anticipo' ? 'Anticipo' : 'Posticipo'}</h3>
+            <p className="text-gray-500 mb-8 text-sm">
+              Vuoi inviare una proposta a <span className="font-bold text-black">{shiftConfirm.app.isForFriend ? shiftConfirm.app.friendDetails?.firstName : shiftConfirm.app.customer?.displayName}</span> per spostare l'appuntamento alle <span className="font-bold text-black">{format(shiftConfirm.direction === 'anticipo' ? showGapFiller!.start : addMinutes(showGapFiller!.end, -(shiftConfirm.app.services.reduce((acc, s) => acc + s.duration, 0))), 'HH:mm')}</span>?
+            </p>
+            <div className="flex flex-col gap-3">
+              <button
+                disabled={sendingProposal}
+                onClick={handleShiftProposal}
+                className="w-full py-4 bg-blue-600 text-white rounded-2xl font-bold hover:bg-blue-700 transition-all flex justify-center items-center gap-2"
+              >
+                {sendingProposal ? 'Invio in corso...' : 'Sì, Invia Proposta'}
+              </button>
+              <button
+                disabled={sendingProposal}
+                onClick={() => setShiftConfirm(null)}
+                className="w-full py-4 bg-gray-100 text-gray-600 rounded-2xl font-bold hover:bg-gray-200 transition-all"
+              >
+                Annulla
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Popup Proposta Rifiutata */}
       {declinedProposalNotif && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[150] p-4 animate-in fade-in duration-200">
@@ -1824,6 +1937,25 @@ const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
       if (exception) return !exception.isClosed;
       return !businessSettings.closedDays.includes(getDay(d));
     });
+  }, [specialDays, businessSettings]);
+
+  // 🚀 MEMOIZZAZIONE REGOLE CALENDARIO BARBIERE
+  const disabledDays = React.useMemo(() => {
+    return [
+      { before: startOfDay(new Date()) },
+      (date: Date) => {
+        const dateString = format(date, 'yyyy-MM-dd');
+        // 1. Controllo Eccezioni (Ferie o APERTURE STRAORDINARIE)
+        const exception = specialDays.find(ex => ex.date === dateString);
+        if (exception) {
+          return exception.isClosed;
+        }
+        // 2. Controllo giorni di chiusura standard
+        if (businessSettings.closedDays.includes(getDay(date))) return true;
+        
+        return false;
+      }
+    ];
   }, [specialDays, businessSettings]);
 
   useEffect(() => {
@@ -2365,16 +2497,7 @@ const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
                     setShowCalendar(false);
                   }
                 }}
-                disabled={[
-                  { before: startOfDay(new Date()) }, // Disabilita i giorni passati
-                  (date) => {
-                    // Blocca ferie e domeniche (dinamico dal DB)
-                    const dateString = format(date, 'yyyy-MM-dd');
-                    const exception = specialDays.find(ex => ex.date === dateString);
-                    if (exception) return exception.isClosed;
-                    return businessSettings.closedDays.includes(getDay(date));
-                  }
-                ]}
+                disabled={disabledDays}
                 locale={it}
                 className="border-none"
                 modifiersClassNames={{
