@@ -102,8 +102,10 @@ export function calculateOptimalSlots(
           }
         }
 
-        // Filtro Anti-Micro-Buco
-        if ((L_rem_before > 0 && L_rem_before < M_min) || (L_rem_after > 0 && L_rem_after < M_min)) {
+       // 🚀 FILTRO ANTI-BUCO DINAMICO: 30 min per i blocchi grandi, M_min (15) per quelli piccoli
+        const minGapAllowed = window.length > 120 ? 30 : M_min;
+
+        if ((L_rem_before > 0 && L_rem_before < minGapAllowed) || (L_rem_after > 0 && L_rem_after < minGapAllowed)) {
           continue; 
         }
 

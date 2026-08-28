@@ -231,6 +231,106 @@ export default function CustomerBooking({
   const [selectedDate, setSelectedDate] = useState<Date>(visibleDays[0] || todayNormalized);
   const [availableSlots, setAvailableSlots] = useState<Date[]>([]);
   const [selectedSlot, setSelectedSlot] = useState<Date | null>(null);
+
+  // 🚀 STATI PER LO SCANNER DEI GIORNI PIENI
+  const [fullyBookedDays, setFullyBookedDays] = useState<string[]>([]);
+  const [isScanningDays, setIsScanningDays] = useState(false);
+
+  // 🚀 MOTORE DI SCANSIONE IN BACKGROUND
+  useEffect(() => {
+    const scanVisibleDays = async () => {
+      // Se non ha scelto servizi o non ci sono giorni visibili, non oscuriamo nulla
+      if (selectedServices.length === 0 || visibleDays.length === 0) {
+        setFullyBookedDays([]);
+        return;
+      }
+
+      setIsScanningDays(true);
+      try {
+        const windowStartMs = startOfDay(visibleDays[0]);
+        const windowEndMs = endOfDay(visibleDays[visibleDays.length - 1]);
+
+        // 1. Facciamo UNA SOLA query Firebase per tutta la finestra di 14 giorni
+        const q = query(
+          collection(db, 'appointments'),
+          where('startTime', '>=', Timestamp.fromDate(windowStartMs)),
+          where('startTime', '<=', Timestamp.fromDate(windowEndMs)),
+          where('status', '==', 'booked')
+        );
+        const snap = await getDocs(q);
+        const windowApps = snap.docs.map(doc => doc.data() as Appointment);
+
+        // 2. Prepariamo i parametri dell'algoritmo
+        const totalDuration = selectedServices.reduce((acc, s) => acc + s.duration, 0);
+        const totalFlexibility = selectedServices.reduce((acc, s) => acc + (s.flexibility || 0), 0);
+        const requestedService = { id: 'combo', duration: totalDuration, flexibility: totalFlexibility };
+
+        const mappedCatalog = SERVICES.map(s => ({
+          id: s.id,
+          duration: s.duration,
+          flexibility: s.flexibility || 0
+        }));
+
+        const busyDays: string[] = [];
+        const now = new Date();
+
+        // 3. Simuliamo il calcolo per ogni singolo giorno della finestra
+        for (const day of visibleDays) {
+          const dateString = format(day, 'yyyy-MM-dd');
+          const exception = specialDays.find(ex => ex.date === dateString);
+          const activeHours = exception?.openingHours || businessSettings.openingHours;
+
+          // Filtriamo appuntamenti solo per il giorno ciclato
+          const dayStartMs = startOfDay(day).getTime();
+          const dayEndMs = endOfDay(day).getTime();
+          const dayApps = windowApps.filter(app => {
+            const t = app.startTime.toDate().getTime();
+            return t >= dayStartMs && t <= dayEndMs;
+          }).map(app => {
+            const actualDur = (app.endTime.toDate().getTime() - app.startTime.toDate().getTime()) / 60000;
+            const nomDur = app.services?.reduce((acc: number, s: any) => acc + s.duration, 0) || actualDur;
+            return {
+              start: app.startTime.toDate(),
+              end: app.endTime.toDate(),
+              isCompressed: actualDur < nomDur
+            };
+          });
+
+          let slotsFound = 0;
+
+          // Calcoliamo gli slot per ogni turno di quel giorno
+          activeHours.forEach(range => {
+            const sH = Math.floor(range.start);
+            const sM = Math.round((range.start - sH) * 60);
+            const shiftStart = setMinutes(setHours(day, sH), sM);
+
+            const eH = Math.floor(range.end);
+            const eM = Math.round((range.end - eH) * 60);
+            const shiftEnd = setMinutes(setHours(day, eH), eM);
+
+            const slots = calculateOptimalSlots(requestedService, mappedCatalog, dayApps, { start: shiftStart, end: shiftEnd });
+            
+            // Se è oggi, scartiamo gli slot passati per non dare falsi positivi
+            const validSlots = isSameDay(day, now) ? slots.filter(s => isAfter(s, now)) : slots;
+            slotsFound += validSlots.length;
+          });
+
+          // Se per questo giorno, con questo specifico servizio, ci sono 0 slot... lo dichiariamo PIENO!
+          if (slotsFound === 0) {
+            busyDays.push(dateString);
+          }
+        }
+
+        setFullyBookedDays(busyDays);
+      } catch (error) {
+        console.error("Errore nello scanning dei giorni:", error);
+      } finally {
+        setIsScanningDays(false);
+      }
+    };
+
+    scanVisibleDays();
+  }, [selectedServices, visibleDays, businessSettings, specialDays]);
   
   const [phonePrefix, setPhonePrefix] = useState('+39');
   const [phoneNumber, setPhoneNumber] = useState('');
@@ -1205,20 +1305,28 @@ export default function CustomerBooking({
                 </div>
 
                 <div className="hidden sm:flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
-                  {visibleDays.map(date => (
-                    <button
-                      key={date.getTime()}
-                      onClick={() => { setSelectedDate(date); setSelectedSlot(null); }}
-                      className={`flex-shrink-0 w-20 py-4 rounded-2xl border transition-all flex flex-col items-center gap-1 ${
-                        isSameDay(date, selectedDate)
-                        ? 'border-black bg-black text-white shadow-lg'
-                        : 'border-gray-400 hover:border-black bg-white'
-                      }`}
-                    >
-                      <span className="text-xs uppercase font-bold opacity-60">{format(date, 'EEE', { locale: it })}</span>
-                      <span className="text-xl font-bold">{format(date, 'd')}</span>
-                    </button>
-                  ))}
+                  {visibleDays.map(date => {
+                    const dateStr = format(date, 'yyyy-MM-dd');
+                    const isFull = fullyBookedDays.includes(dateStr); // 🚀 Controllo se è pieno
+                    const isSelected = isSameDay(date, selectedDate);
+
+                    return (
+                      <button
+                        key={date.getTime()}
+                        disabled={isFull}
+                        onClick={() => { setSelectedDate(date); setSelectedSlot(null); }}
+                        className={cn(
+                          "flex-shrink-0 w-20 py-4 rounded-2xl border transition-all flex flex-col items-center gap-1",
+                          isFull ? "opacity-40 bg-gray-50 border-gray-200 cursor-not-allowed grayscale" :
+                          isSelected ? "border-black bg-black text-white shadow-lg" : "border-gray-400 hover:border-black bg-white"
+                        )}
+                        title={isFull ? "Tutto esaurito per questo servizio" : undefined}
+                      >
+                        <span className="text-xs uppercase font-bold opacity-60">{format(date, 'EEE', { locale: it })}</span>
+                        <span className="text-xl font-bold">{format(date, 'd')}</span>
+                      </button>
+                    );
+                  })}
                 </div>
 
                 <div className="sm:hidden relative">
@@ -1231,11 +1339,14 @@ export default function CustomerBooking({
                     }}
                     className="w-full p-4 bg-white border border-gray-400 rounded-2xl font-bold appearance-none focus:border-black outline-none"
                   >
-                    {visibleDays.map(date => (
-                      <option key={date.getTime()} value={date.getTime().toString()}>
-                        {format(date, 'EEEE d MMMM', { locale: it })}
-                      </option>
-                    ))}
+                    {visibleDays.map(date => {
+                      const isFull = fullyBookedDays.includes(format(date, 'yyyy-MM-dd'));
+                      return (
+                        <option key={date.getTime()} value={date.getTime().toString()} disabled={isFull}>
+                          {format(date, 'EEEE d MMMM', { locale: it })} {isFull ? '(Esaurito)' : ''}
+                        </option>
+                      );
+                    })}
                   </select>
                   <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" size={20} />
                 </div>
@@ -1628,11 +1739,16 @@ export default function CustomerBooking({
                 disabled={[
                   { before: todayNormalized, after: maxBookingDate }, 
                   (date) => {
-                    // Disabilita dinamicamente ferie e domeniche nel calendario
                     const dateString = format(date, 'yyyy-MM-dd');
+                    // 1. Blocca ferie
                     const exception = specialDays.find(ex => ex.date === dateString);
-                    if (exception) return exception.isClosed;
-                    return businessSettings.closedDays.includes(getDay(date));
+                    if (exception && exception.isClosed) return true;
+                    // 2. Blocca giorni di ordinaria chiusura
+                    if (businessSettings.closedDays.includes(getDay(date))) return true;
+                    // 3. 🚀 BLOCCA I GIORNI TOTALMENTE PIENI
+                    if (fullyBookedDays.includes(dateString)) return true; 
+                    
+                    return false;
                   }
                 ]}
                 locale={it}

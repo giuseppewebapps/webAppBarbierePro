@@ -36,6 +36,8 @@ import {
   addMinutes,
   getDay
 } from 'date-fns';
+import { DayPicker } from 'react-day-picker';
+import 'react-day-picker/style.css';
 import { it } from 'date-fns/locale';
 import { 
   Calendar as CalendarIcon, 
@@ -1688,6 +1690,7 @@ const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
   // 🚀 NUOVO STATO: La "Rubrica Universale" scaricata in memoria (RAM)
   const [globalDirectory, setGlobalDirectory] = useState<{ firstName: string, lastName: string, phone: string, email: string, displayPhone: string, phonePrefix: string }[]>([]);
   const [directoryLoaded, setDirectoryLoaded] = useState(false);
+  const [showCalendar, setShowCalendar] = useState(false);
 
   // Ref per gestire il clic fuori dalla tendina
   const searchContainerRef = useRef<HTMLDivElement>(null);
@@ -2229,9 +2232,18 @@ const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
           {/* Date & Time */}
           <section className="space-y-6">
             <div>
-              <h3 className="text-sm font-bold text-gray-400 uppercase tracking-widest mb-4 flex items-center gap-2">
-                <CalendarIcon size={14} /> Data
-              </h3>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-sm font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2 m-0">
+                  <CalendarIcon size={14} /> Data
+                </h3>
+                <button 
+                  onClick={() => setShowCalendar(true)}
+                  className="flex items-center gap-2 text-xs font-bold text-black bg-gray-100 px-3 py-2 rounded-xl hover:bg-gray-200 transition-all"
+                >
+                  <CalendarIcon size={14} />
+                  Calendario
+                </button>
+              </div>
               <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-thin scrollbar-thumb-gray-200 scrollbar-track-transparent">
                 {next30Days.map(date => {
                   const isSelected = isSameDay(date, selectedDate);
@@ -2326,6 +2338,62 @@ const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
           </button>
         </div>
       </div>
+
+      {/* 🚀 MODALE CALENDARIO BARBIERE */}
+      {showCalendar && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[200] p-4 animate-in fade-in">
+          <div className="bg-white w-full max-w-sm rounded-[32px] p-6 shadow-2xl border border-white/20 animate-in zoom-in-95">
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="text-xl font-bold">Seleziona Data</h3>
+              <button 
+                onClick={() => setShowCalendar(false)}
+                className="p-2 hover:bg-gray-100 rounded-full transition-colors"
+              >
+                <XCircle size={24} className="text-gray-400" />
+              </button>
+            </div>
+            
+            <div className="flex justify-center bg-gray-50 rounded-2xl p-4 mb-6">
+              <DayPicker
+                mode="single"
+                selected={selectedDate}
+                onSelect={(date) => {
+                  if (date) {
+                    const normalizedDate = startOfDay(date);
+                    setSelectedDate(normalizedDate);
+                    setSelectedSlot(null);
+                    setShowCalendar(false);
+                  }
+                }}
+                disabled={[
+                  { before: startOfDay(new Date()) }, // Disabilita i giorni passati
+                  (date) => {
+                    // Blocca ferie e domeniche (dinamico dal DB)
+                    const dateString = format(date, 'yyyy-MM-dd');
+                    const exception = specialDays.find(ex => ex.date === dateString);
+                    if (exception) return exception.isClosed;
+                    return businessSettings.closedDays.includes(getDay(date));
+                  }
+                ]}
+                locale={it}
+                className="border-none"
+                modifiersClassNames={{
+                  selected: "bg-black text-white rounded-full",
+                  today: "text-emerald-600 font-bold"
+                }}
+              />
+            </div>
+
+            <button
+              onClick={() => setShowCalendar(false)}
+              className="w-full py-4 bg-black text-white rounded-2xl font-bold hover:bg-gray-800 transition-all"
+            >
+              Chiudi
+            </button>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
