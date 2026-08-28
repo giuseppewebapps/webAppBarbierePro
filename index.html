@@ -2,19 +2,21 @@
 <html lang="it">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     
-    <!-- Titolo -->
+    <!-- Istruzioni Anti-Cache Aggressive per PWA -->
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
+
+    <!-- Colore della barra di stato del telefono -->
+    <meta name="theme-color" content="#000000" />
+    
     <title>Medo HS App</title>
     
-    <!-- Collegamento essenziale al file Manifest per l'installazione su smartphone -->
     <link rel="manifest" href="/manifest.json" />
-    
-    <!-- Le icone locali -->
     <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
     <link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png" />
-    
-    <!-- Icona specifica per i dispositivi Apple -->
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
   </head>
   <body>
