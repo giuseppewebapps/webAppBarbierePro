@@ -861,7 +861,7 @@ export default function CustomerBooking({
         return;
       }
       
-      if (action === 'accepted') {
+     if (action === 'accepted') {
         const appDoc = await getDoc(doc(db, 'appointments', currentTarget.appointmentId));
         if (!appDoc.exists()) {
           console.error("Original appointment not found");
@@ -871,6 +871,17 @@ export default function CustomerBooking({
         }
 
         const myApp = appDoc.data() as Appointment;
+
+        // 🚀 BLOCCO STALE DATA: Intercetta l'appuntamento già annullato
+        if (myApp.status !== 'booked') {
+          alert("Questo appuntamento è stato annullato o completato dal barbiere. La proposta di cambio non è più valida.");
+          await updateDoc(proposalRef, { status: 'cancelled' });
+          setProposals(prev => prev.filter(p => p.id !== proposal.id));
+          setSelectedProposal(null);
+          setLoading(false);
+          return;
+        }
+        
         const newStartTime = currentTarget.proposedStartTime ? currentTarget.proposedStartTime.toDate() : freshProposal.gapStartTime.toDate();
         
         // 🚀 APPLICAZIONE DECOMPRESSIONE: Se la proposta contiene la fine (Shift intelligente), usala!

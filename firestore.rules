@@ -51,7 +51,8 @@ service cloud.firestore {
       allow create: if isAuthenticated() && isValidAppointment(request.resource.data);
       allow update: if isAuthenticated() && (
         isAdmin() || 
-        (resource.data.customerId == request.auth.uid && isValidAppointment(request.resource.data)) ||
+        // BLOCCO STALE DATA: Il cliente può modificare SOLO se l'appuntamento è ancora 'booked'
+        (resource.data.customerId == request.auth.uid && resource.data.status == 'booked' && isValidAppointment(request.resource.data)) ||
         (resource.data.customerId == 'manual_entry' && request.resource.data.customerId == request.auth.uid)
       );
       allow delete: if isAdmin() || (isAuthenticated() && resource.data.status == 'cancelled') || (isAuthenticated() && resource.data.customerId == request.auth.uid);
