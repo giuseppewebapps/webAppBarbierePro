@@ -669,6 +669,20 @@ const handleSaveCustomerEdits = async () => {
     
     setSendingProposal(true);
     try {
+      // 🚀 CONTROLLO ANTI-SPAM (Niente proposte duplicate)
+      const existingQ = query(collection(db, 'rescheduleProposals'), where('status', '==', 'active'));
+      const existingSnap = await getDocs(existingQ);
+      const hasDuplicate = existingSnap.docs.some(doc => {
+        const data = doc.data() as RescheduleProposal;
+        return data.targets.some(t => t.appointmentId === candidateApp.id);
+      });
+
+      if (hasDuplicate) {
+        alert("Hai già inviato una proposta a questo cliente! Attendi la sua risposta.");
+        setShiftConfirm(null);
+        setSendingProposal(false);
+        return;
+      }
       const nominalDuration = candidateApp.services.reduce((acc, s) => acc + s.duration, 0);
       let newStart: Date, newEnd: Date;
 

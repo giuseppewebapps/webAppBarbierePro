@@ -883,6 +883,26 @@ export default function CustomerBooking({
           newEndTime = new Date(newStartTime.getTime() + duration);
         }
 
+        // 🚀 PRE-CHECK ANTI-SOVRAPPOSIZIONE (Previene la doppia accettazione)
+        const conflictQuery = query(
+          collection(db, 'appointments'),
+          where('status', '==', 'booked'),
+          where('startTime', '<', Timestamp.fromDate(newEndTime)),
+          where('endTime', '>', Timestamp.fromDate(newStartTime))
+        );
+        const conflictSnap = await getDocs(conflictQuery);
+        // Filtriamo se stesso per evitare falsi positivi
+        const realConflicts = conflictSnap.docs.filter(d => d.id !== currentTarget.appointmentId);
+        
+        if (realConflicts.length > 0) {
+          alert("Spiacenti, questo orario non è più disponibile perché il barbiere ha già riempito lo spazio. L'appuntamento rimarrà al tuo orario originale.");
+          await updateDoc(proposalRef, { status: 'cancelled' });
+          setProposals(prev => prev.filter(p => p.id !== proposal.id));
+          setSelectedProposal(null);
+          setLoading(false);
+          return; // Blocca tutto e non sovrascrive
+        }
+
         await updateDoc(doc(db, 'appointments', currentTarget.appointmentId), {
           startTime: Timestamp.fromDate(newStartTime),
           endTime: Timestamp.fromDate(newEndTime),
