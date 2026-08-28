@@ -1071,29 +1071,31 @@ export default function CustomerBooking({
     }
   };
 
-  // 🚀 MEMOIZZAZIONE REGOLE CALENDARIO (Evita Crash + Fix Aperture Straordinarie)
+  // 🚀 MEMOIZZAZIONE REGOLE CALENDARIO (Singola Funzione Blindata)
   const disabledDays = useMemo(() => {
-    return [
-      { before: todayNormalized, after: maxBookingDate },
-      (date: Date) => {
-        const dateString = format(date, 'yyyy-MM-dd');
-        
-        // 1. Controllo Eccezioni (Ferie o APERTURE STRAORDINARIE)
-        const exception = specialDays.find(ex => ex.date === dateString);
-        if (exception) {
-          // Se è un'eccezione aperta (isClosed: false), restituisce false e lo rende cliccabile
-          return exception.isClosed; 
-        }
-        
-        // 2. Controllo giorni di chiusura standard (es. Domenica e Lunedì)
-        if (businessSettings.closedDays.includes(getDay(date))) return true;
-        
-        // 3. Controllo giorni completamente pieni
-        if (fullyBookedDays.includes(dateString)) return true;
-        
-        return false;
+    return (date: Date) => {
+      // 1. Limiti temporali assoluti (Blocca il passato o date oltre i 150 giorni)
+      if (isBefore(startOfDay(date), todayNormalized)) return true;
+      if (isAfter(startOfDay(date), maxBookingDate)) return true;
+
+      const dateString = format(date, 'yyyy-MM-dd');
+      
+      // 2. Eccezioni del Calendario (Ferie o Aperture Straordinarie)
+      const exception = specialDays.find(ex => ex.date === dateString);
+      if (exception) {
+        if (exception.isClosed) return true; // Ferie forzate
+        if (fullyBookedDays.includes(dateString)) return true; // Aperto eccezionalmente, ma esaurito
+        return false; // Domenica aperta e con posti: Rendila cliccabile!
       }
-    ];
+      
+      // 3. Regole Standard di chiusura (es. Domenica e Lunedì)
+      if (businessSettings.closedDays.includes(getDay(date))) return true;
+      
+      // 4. Scudo anti-overbooking per i giorni standard
+      if (fullyBookedDays.includes(dateString)) return true;
+      
+      return false;
+    };
   }, [todayNormalized, maxBookingDate, specialDays, businessSettings, fullyBookedDays]);
 
   const upcomingAppointments = myAppointments
