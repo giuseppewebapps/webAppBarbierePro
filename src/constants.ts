@@ -1,5 +1,10 @@
 import { Service } from './types';
 
+export const YIELD_CONFIG = {
+  URGENCY_CURRENT_WEEK: true, // Disattiva lo scudo rigoroso per tutti i giorni della settimana corrente (Lun-Dom)
+  MIN_SATURATION_RATE: 0.75   // Accetta la frammentazione se il servizio copre almeno il 75% del buco
+};
+
 export const SERVICES: Service[] = [
   { 
     id: 'barba', 

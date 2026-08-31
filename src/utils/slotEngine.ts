@@ -1,5 +1,5 @@
-import { addMinutes, isBefore, isAfter } from 'date-fns';
-
+import { addMinutes, isBefore, isAfter, isSameWeek } from 'date-fns';
+import { YIELD_CONFIG } from '../constants';
 /**
  * ============================================================================
  * MOTORE DI YIELD MANAGEMENT & SCHEDULING (Slot Engine)
@@ -163,7 +163,24 @@ export function calculateOptimalSlots(
             if (window.length >= D_min_higher && D_min_req < D_min_higher) {
               const destroysBefore = L_rem_before > 0 && L_rem_before < D_min_higher;
               const destroysAfter = L_rem_after > 0 && L_rem_after < D_min_higher;
+              
               if (destroysBefore || destroysAfter) {
+                // 🚀 IBRIDO: Settimana in Corso + Soglia di Saturazione
+                const now = new Date();
+                const saturation = D_req / window.length;
+                
+                // Verifica se lo slot cade nella stessa settimana solare di oggi (inizia di Lunedì)
+                const isUrgent = YIELD_CONFIG.URGENCY_CURRENT_WEEK 
+                  ? isSameWeek(slotStart, now, { weekStartsOn: 1 })
+                  : false;
+
+                const isHighlySaturated = saturation >= YIELD_CONFIG.MIN_SATURATION_RATE;
+
+                // Se l'appuntamento è in questa settimana E satura gran parte del buco, IGNORA LO SCUDO
+                if (isUrgent && isHighlySaturated) {
+                  continue; 
+                }
+
                 shieldActivated = true;
                 break;
               }
