@@ -13,32 +13,40 @@ import { YIELD_CONFIG } from '../constants';
  * 
  * 1. CLAMPING (Isolamento Turni)
  *    Gli appuntamenti vengono "tagliati" ai bordi del turno che si sta calcolando. 
- *    Questo evita che un appuntamento pomeridiano falsi il calcolo di una finestra mattutina.
+ *    Questo evita che un appuntamento esterno (es. pomeridiano) falsi il calcolo 
+ *    di una finestra interna (es. mattutina).
  * 
  * 2. COMPRESSIONE PROATTIVA (Elasticità)
  *    Il motore tenta di incastrare il servizio usando la sua Durata Nominale. Se fallisce 
- *    (per colpa dello Scudo o dei Buchi), ritenta immediatamente nella stessa esecuzione 
- *    usando la Durata Compressa (Nominale - Flessibilità).
+ *    (per colpa dello Scudo o della frammentazione), ritenta immediatamente nella stessa 
+ *    esecuzione usando la Durata Compressa (Nominale - Flessibilità).
  * 
  * 3. ANTI-BURNOUT (Tutela Operativa)
  *    L'algoritmo non permette la concatenazione di due servizi compressi ("affannati").
- *    Se si tenta di comprimere un appuntamento, si verifica se tocca un appuntamento già 
- *    compresso. In tal caso, la flessibilità viene vietata e si usa la durata standard.
+ *    Se si tenta di comprimere un appuntamento, si verifica se questo toccherà un appuntamento 
+ *    già compresso ai suoi bordi. In tal caso, la flessibilità viene vietata per garantire respiro.
  * 
  * 4. FILTRO ANTI-BUCO DINAMICO (Grid Snapping)
- *    - In grandi spazi (> 120 min): Il sistema vieta la creazione di buchi inferiori a 30 min.
+ *    - In grandi spazi (> 120 min): Il sistema vieta rigorosamente la creazione di buchi 
+ *      inferiori a 30 minuti per mantenere intatta la griglia.
  *    - In spazi frammentati (<= 120 min): Il sistema allenta la presa e accetta incastri 
- *      fino al limite minimo consentito dal catalogo (M_min, es. 15 min).
+ *      che generano buchi fino al limite minimo fisiologico consentito dal listino (es. 15 min).
  * 
  * 5. REGOLA DEI MICRO-SERVIZI (Tappi)
- *    Qualsiasi servizio inferiore ai 30 minuti nominali (es. Solo Barba) è forzato ad 
- *    ancorarsi ESCLUSIVAMENTE all'apertura o alla chiusura esatta del turno, agendo da 
- *    tappo per non sfilacciare il centro della giornata.
+ *    Qualsiasi servizio "corto" (es. durata inferiore ai 30 minuti) è costretto ad 
+ *    ancorarsi ESCLUSIVAMENTE all'apertura o alla chiusura di un turno libero. 
+ *    Questo impedisce che piccoli servizi sfilaccino il centro produttivo della giornata.
  * 
- * 6. SCUDO DI PRIORITÀ (Costo Opportunità)
- *    Analizza il residuo (L_rem) che avanza dopo aver piazzato un appuntamento. Se quel 
- *    residuo è "tossico" (cioè distrugge lo spazio vitale per un servizio Premium che 
- *    prima ci stava perfettamente), lo slot viene scartato per proteggere gli incassi.
+ * 6. SCUDO DI PRIORITÀ IBRIDO (Costo Opportunità + Yield Management)
+ *    Il motore analizza il residuo di tempo generato dall'inserimento di uno slot. 
+ *    Se quel residuo "distrugge" lo spazio vitale per un servizio Premium che 
+ *    inizialmente ci stava perfettamente (es. inserire un 45 min in un buco da 60), 
+ *    lo slot viene scartato per proteggere gli incassi futuri.
+ *    ECCEZIONE DINAMICA: Lo Scudo si abbassa automaticamente se si verificano due condizioni:
+ *    A) Urgenza: L'appuntamento cade nella settimana solare in corso.
+ *    B) Saturazione: Il servizio richiesto copre un'alta percentuale dello spazio 
+ *       disponibile (es. >= 75%). 
+ *    Questo garantisce agende blindate sul lungo periodo, ma flessibili a ridosso della scadenza.
  * ============================================================================
  */
 

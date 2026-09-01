@@ -6,7 +6,7 @@ service cloud.firestore {
     function isOwner(userId) { return isAuthenticated() && request.auth.uid == userId; }
     function isAdmin() {
       return isAuthenticated() && (
-        request.auth.token.email in ['eaglewealth.fs@gmail.com', 'malderadomenico98@gmail.com', 'do.maldera@libero.it'] ||
+        request.auth.token.email in ['eaglewealth.fs@gmail.com', 'malderadomenico98@gmail.com', 'do.maldera@libero.it', 'sminghioni.holding@gmail.com'] ||
         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'barber')
       );
