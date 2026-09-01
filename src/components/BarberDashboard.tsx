@@ -745,14 +745,42 @@ const handleSaveCustomerEdits = async () => {
       .filter(a => isSameDay(a.startTime.toDate(), clickedGap.start) && a.status === 'booked')
       .sort((a, b) => a.startTime.toMillis() - b.startTime.toMillis());
     
-    let trueEnd = setHours(startOfDay(clickedGap.start), 20);
+    // 1. Identifica i turni validi del giorno per non esondare nella chiusura
+    const dateString = format(clickedGap.start, 'yyyy-MM-dd');
+    const dayOfWeek = getDay(clickedGap.start);
+    const exception = specialDays.find(ex => ex.date === dateString);
+    
+    let activeHours: TimeRange[] = [];
+    if (exception && !exception.isClosed) {
+      activeHours = exception.openingHours?.length ? exception.openingHours : (businessSettings.weeklySchedule[dayOfWeek]?.shifts || []);
+    } else {
+      activeHours = businessSettings.weeklySchedule[dayOfWeek]?.shifts || [];
+    }
+
+    let currentShiftEnd = setHours(startOfDay(clickedGap.start), 20); // Fallback
+    for (const range of activeHours) {
+      const eH = Math.floor(range.end);
+      const eM = Math.round((range.end - eH) * 60);
+      const shiftEnd = setMinutes(setHours(startOfDay(clickedGap.start), eH), eM);
+      
+      if (isAfter(shiftEnd, clickedGap.start)) {
+        currentShiftEnd = shiftEnd;
+        break;
+      }
+    }
+
+    // 2. Il limite del buco è il prossimo appuntamento OPPURE la chiusura del turno
+    let trueEnd = currentShiftEnd;
     const nextApp = dayApps.find(a => isAfter(a.startTime.toDate(), clickedGap.start) || a.startTime.toDate().getTime() === clickedGap.start.getTime());
     
-    if (nextApp) { trueEnd = nextApp.startTime.toDate(); }
+    if (nextApp && isBefore(nextApp.startTime.toDate(), currentShiftEnd)) { 
+      trueEnd = nextApp.startTime.toDate(); 
+    }
     
     const expandedGap = { ...clickedGap, end: trueEnd };
     const gapDuration = (trueEnd.getTime() - clickedGap.start.getTime()) / (1000 * 60);
 
+    // 3. Filtra chi entra perfettamente nel buco
     const candidates = appointments.filter(app => {
       const appStart = app.startTime.toDate();
       const appDuration = (app.endTime.toDate().getTime() - app.startTime.toDate().getTime()) / (1000 * 60);
