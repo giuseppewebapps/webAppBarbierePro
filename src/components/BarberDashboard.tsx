@@ -798,8 +798,8 @@ const handleSaveCustomerEdits = async () => {
                 {format(selectedDate, 'EEEE d MMMM', { locale: it })}
               </h3>
               
-              <div className="relative flex items-center justify-center cursor-pointer">
-                <button className="p-2 hover:bg-gray-100 rounded-full text-gray-500 hover:text-black transition-colors focus:outline-none">
+              <div className="relative w-10 h-10 flex items-center justify-center cursor-pointer shrink-0 overflow-hidden rounded-full">
+                <button className="w-full h-full flex items-center justify-center hover:bg-gray-100 text-gray-500 hover:text-black transition-colors focus:outline-none">
                   <CalendarIcon size={20} />
                 </button>
                 <input
@@ -810,7 +810,7 @@ const handleSaveCustomerEdits = async () => {
                       setSelectedDate(new Date(e.target.value));
                     }
                   }}
-                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer m-0 p-0"
                   title="Seleziona una data"
                 />
               </div>
@@ -2378,40 +2378,27 @@ const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
           {/* Date & Time */}
           <section className="space-y-6">
             <div>
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-sm font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2 m-0">
-                  <CalendarIcon size={14} /> Data
-                </h3>
-                <button 
-                  onClick={() => setShowCalendar(true)}
-                  className="flex items-center gap-2 text-xs font-bold text-black bg-gray-100 px-3 py-2 rounded-xl hover:bg-gray-200 transition-all"
-                >
-                  <CalendarIcon size={14} />
-                  Calendario
-                </button>
-              </div>
-              <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-thin scrollbar-thumb-gray-200 scrollbar-track-transparent">
-                {next30Days.map(date => {
-                  const isSelected = isSameDay(date, selectedDate);
-                  return (
-                    <button
-                      key={date.toISOString()}
-                      onClick={() => {
-                        setSelectedDate(date);
-                        setSelectedSlot(null);
-                      }}
-                      className={cn(
-                        "flex-shrink-0 w-16 py-3 rounded-2xl border transition-all flex flex-col items-center gap-1",
-                        isSelected 
-                          ? "bg-black border-black text-white shadow-lg" 
-                          : "bg-white border-gray-100 text-gray-600 hover:border-gray-200"
-                      )}
-                    >
-                      <span className="text-[10px] font-bold uppercase opacity-60">{format(date, 'EEE', { locale: it })}</span>
-                      <span className="text-lg font-bold">{format(date, 'd')}</span>
-                    </button>
-                  );
-                })}
+              <h3 className="text-sm font-bold text-gray-400 uppercase tracking-widest mb-4 flex items-center gap-2 m-0">
+                <CalendarIcon size={14} /> Data
+              </h3>
+              <div className="flex justify-center bg-white border border-gray-100 rounded-3xl p-2 sm:p-4 shadow-sm">
+                <DayPicker
+                  mode="single"
+                  selected={selectedDate}
+                  onSelect={(date) => {
+                    if (date) {
+                      setSelectedDate(startOfDay(date));
+                      setSelectedSlot(null);
+                    }
+                  }}
+                  disabled={disabledDays}
+                  locale={it}
+                  className="border-none w-full flex justify-center"
+                  modifiersClassNames={{
+                    selected: "bg-black text-white rounded-full",
+                    today: "text-emerald-600 font-bold"
+                  }}
+                />
               </div>
             </div>
 
@@ -2484,52 +2471,6 @@ const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
           </button>
         </div>
       </div>
-
-      {/* 🚀 MODALE CALENDARIO BARBIERE */}
-      {showCalendar && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[200] p-4 animate-in fade-in">
-          <div className="bg-white w-full max-w-sm rounded-[32px] p-6 shadow-2xl border border-white/20 animate-in zoom-in-95">
-            <div className="flex justify-between items-center mb-6">
-              <h3 className="text-xl font-bold">Seleziona Data</h3>
-              <button 
-                onClick={() => setShowCalendar(false)}
-                className="p-2 hover:bg-gray-100 rounded-full transition-colors"
-              >
-                <XCircle size={24} className="text-gray-400" />
-              </button>
-            </div>
-            
-            <div className="flex justify-center bg-gray-50 rounded-2xl p-4 mb-6">
-              <DayPicker
-                mode="single"
-                selected={selectedDate}
-                onSelect={(date) => {
-                  if (date) {
-                    const normalizedDate = startOfDay(date);
-                    setSelectedDate(normalizedDate);
-                    setSelectedSlot(null);
-                    setShowCalendar(false);
-                  }
-                }}
-                disabled={disabledDays}
-                locale={it}
-                className="border-none"
-                modifiersClassNames={{
-                  selected: "bg-black text-white rounded-full",
-                  today: "text-emerald-600 font-bold"
-                }}
-              />
-            </div>
-
-            <button
-              onClick={() => setShowCalendar(false)}
-              className="w-full py-4 bg-black text-white rounded-2xl font-bold hover:bg-gray-800 transition-all"
-            >
-              Chiudi
-            </button>
-          </div>
-        </div>
-      )}
 
     </div>
   );

@@ -204,34 +204,31 @@ export default function CustomerBooking({
   const [selectedServices, setSelectedServices] = useState<Service[]>([]);
   const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
   
-// 🚀 1. Limiti Assoluti di Prenotazione (150 giorni) - CONGELATI IN RAM
-  const MAX_BOOKING_DAYS = 150;
+// 🚀 1. Limiti Assoluti di Prenotazione (30 giorni / 1 mese) - CONGELATI IN RAM
+  const MAX_BOOKING_DAYS = 30;
   const { todayNormalized, maxBookingDate } = useMemo(() => {
     const today = startOfDay(new Date());
     return {
       todayNormalized: today,
       maxBookingDate: addDays(today, MAX_BOOKING_DAYS)
     };
-  }, []); // L'array vuoto garantisce che venga calcolato 1 sola volta al mount
+  }, []); 
 
-  // 🚀 2. Stato per gestire "L'inizio" della finestra visibile
-  const [windowStart, setWindowStart] = useState<Date>(todayNormalized);
-
-  // 🚀 3. Finestra Scorrevole (Genera SEMPRE E SOLO 14 giorni alla volta)
+  // 🚀 2. Finestra visibile (Scansiona l'intero range di 30 giorni)
   const visibleDays = useMemo(() => {
     const days = eachDayOfInterval({
-      start: windowStart,
-      end: addDays(windowStart, 14)
+      start: todayNormalized,
+      end: maxBookingDate
     });
     
     return days.filter(d => {
-      if (isAfter(d, maxBookingDate)) return false; // Sicurezza: Mai oltre i 150 giorni
+      if (isAfter(d, maxBookingDate)) return false;
       const dateString = format(d, 'yyyy-MM-dd');
       const exception = specialDays.find(ex => ex.date === dateString);
       if (exception) return !exception.isClosed;
       return !businessSettings.closedDays.includes(getDay(d));
     });
-  }, [windowStart, specialDays, businessSettings, maxBookingDate]);
+  }, [todayNormalized, specialDays, businessSettings, maxBookingDate]);
 
   const [selectedDate, setSelectedDate] = useState<Date>(visibleDays[0] || todayNormalized);
   const [availableSlots, setAvailableSlots] = useState<Date[]>([]);
@@ -1363,62 +1360,25 @@ export default function CustomerBooking({
               </h2>
               
               <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Data</div>
-                  <button 
-                    onClick={() => setShowCalendar(true)}
-                    className="flex items-center gap-2 text-xs font-bold text-black bg-gray-100 px-3 py-2 rounded-xl hover:bg-gray-200 transition-all"
-                  >
-                    <CalendarIcon size={14} />
-                    Calendario
-                  </button>
-                </div>
-
-                <div className="hidden sm:flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
-                  {visibleDays.map(date => {
-                    const dateStr = format(date, 'yyyy-MM-dd');
-                    const isFull = fullyBookedDays.includes(dateStr); // 🚀 Controllo se è pieno
-                    const isSelected = isSameDay(date, selectedDate);
-
-                    return (
-                      <button
-                        key={date.getTime()}
-                        disabled={isFull}
-                        onClick={() => { setSelectedDate(date); setSelectedSlot(null); }}
-                        className={cn(
-                          "flex-shrink-0 w-20 py-4 rounded-2xl border transition-all flex flex-col items-center gap-1",
-                          isFull ? "opacity-40 bg-gray-50 border-gray-200 cursor-not-allowed grayscale" :
-                          isSelected ? "border-black bg-black text-white shadow-lg" : "border-gray-400 hover:border-black bg-white"
-                        )}
-                        title={isFull ? "Tutto esaurito per questo servizio" : undefined}
-                      >
-                        <span className="text-xs uppercase font-bold opacity-60">{format(date, 'EEE', { locale: it })}</span>
-                        <span className="text-xl font-bold">{format(date, 'd')}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-
-                <div className="sm:hidden relative">
-                  <select
-                    value={selectedDate.getTime().toString()}
-                    onChange={(e) => {
-                      const date = new Date(parseInt(e.target.value));
-                      setSelectedDate(date);
-                      setSelectedSlot(null);
+                <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Data</div>
+                <div className="flex justify-center bg-white border border-gray-100 rounded-3xl p-2 sm:p-4 shadow-sm">
+                  <DayPicker
+                    mode="single"
+                    selected={selectedDate}
+                    onSelect={(date) => {
+                      if (date) {
+                        setSelectedDate(startOfDay(date));
+                        setSelectedSlot(null);
+                      }
                     }}
-                    className="w-full p-4 bg-white border border-gray-400 rounded-2xl font-bold appearance-none focus:border-black outline-none"
-                  >
-                    {visibleDays.map(date => {
-                      const isFull = fullyBookedDays.includes(format(date, 'yyyy-MM-dd'));
-                      return (
-                        <option key={date.getTime()} value={date.getTime().toString()} disabled={isFull}>
-                          {format(date, 'EEEE d MMMM', { locale: it })} {isFull ? '(Esaurito)' : ''}
-                        </option>
-                      );
-                    })}
-                  </select>
-                  <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" size={20} />
+                    disabled={disabledDays}
+                    locale={it}
+                    className="border-none w-full flex justify-center"
+                    modifiersClassNames={{
+                      selected: "bg-black text-white rounded-full",
+                      today: "text-emerald-600 font-bold"
+                    }}
+                  />
                 </div>
               </div>
 
