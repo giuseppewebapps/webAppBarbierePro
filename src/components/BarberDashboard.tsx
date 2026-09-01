@@ -16,7 +16,7 @@ import {
   limit
 } from 'firebase/firestore';
 import { db, auth } from '../firebase';
-import { Appointment, UserProfile, RescheduleProposal, TimeRange, Notification as AppNotification } from '../types';
+import { Appointment, UserProfile, RescheduleProposal, TimeRange, Notification as AppNotification, WeeklySchedule } from '../types';
 import { 
   format, 
   startOfDay, 
@@ -66,8 +66,7 @@ import { WhatsAppButton } from './WhatsAppButton';
 import { generateWhatsAppLink } from '../utils/whatsapp';
 import { 
   SERVICES, 
-  DEFAULT_OPENING_HOURS, 
-  DEFAULT_CLOSED_DAYS, 
+  DEFAULT_WEEKLY_SCHEDULE, 
   COUNTRY_CODES, 
   BARBER_EMAILS, 
   SALON_INFO 
@@ -147,11 +146,9 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
 
   // STATO IMPOSTAZIONI ORARI DINAMICHE
   const [businessSettings, setBusinessSettings] = useState<{
-    openingHours: TimeRange[];
-    closedDays: number[];
+    weeklySchedule: WeeklySchedule;
   }>({
-    openingHours: DEFAULT_OPENING_HOURS,
-    closedDays: DEFAULT_CLOSED_DAYS
+    weeklySchedule: DEFAULT_WEEKLY_SCHEDULE
   });
 
   // ASCOLTA LE IMPOSTAZIONI STANDARD DA FIRESTORE
@@ -160,8 +157,7 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
       if (docSnap.exists()) {
         const data = docSnap.data();
         setBusinessSettings({
-          openingHours: data.openingHours || DEFAULT_OPENING_HOURS,
-          closedDays: data.closedDays || DEFAULT_CLOSED_DAYS
+          weeklySchedule: data.weeklySchedule || DEFAULT_WEEKLY_SCHEDULE
         });
       }
     });
@@ -519,11 +515,18 @@ const handleSaveCustomerEdits = async () => {
     switch (viewMode) {
       case 'daily': {
         const dateString = format(selectedDate, 'yyyy-MM-dd');
+        const dayOfWeek = getDay(selectedDate);
         const exceptionForToday = specialDays.find(ex => ex.date === dateString);
-        const activeOpeningHours = exceptionForToday?.openingHours || businessSettings.openingHours;
+        
+        let activeOpeningHours: TimeRange[] = [];
+        if (exceptionForToday && !exceptionForToday.isClosed) {
+          activeOpeningHours = exceptionForToday.openingHours?.length ? exceptionForToday.openingHours : (businessSettings.weeklySchedule[dayOfWeek]?.shifts || []);
+        } else if (!exceptionForToday && businessSettings.weeklySchedule[dayOfWeek]?.isOpen) {
+          activeOpeningHours = businessSettings.weeklySchedule[dayOfWeek].shifts;
+        }
 
         // Se il giorno è chiuso, mostriamo l'intervallo di default (08:00 - 20:00)
-        if (exceptionForToday?.isClosed || (!exceptionForToday && businessSettings.closedDays.includes(getDay(selectedDate))) || activeOpeningHours.length === 0) {
+        if (exceptionForToday?.isClosed || (!exceptionForToday && !businessSettings.weeklySchedule[dayOfWeek]?.isOpen) || activeOpeningHours.length === 0) {
           return {
             type: 'daily' as const,
             items: eachHourOfInterval({
@@ -1052,8 +1055,15 @@ const handleSaveCustomerEdits = async () => {
 
             if (calendarData.type === 'daily') {
               const dateString = format(selectedDate, 'yyyy-MM-dd');
+              const dayOfWeek = getDay(selectedDate);
               const exceptionForToday = specialDays.find(ex => ex.date === dateString);
-              const activeOpeningHours = exceptionForToday?.openingHours || businessSettings.openingHours;
+              
+              let activeOpeningHours: TimeRange[] = [];
+              if (exceptionForToday && !exceptionForToday.isClosed) {
+                activeOpeningHours = exceptionForToday.openingHours?.length ? exceptionForToday.openingHours : (businessSettings.weeklySchedule[dayOfWeek]?.shifts || []);
+              } else if (!exceptionForToday && businessSettings.weeklySchedule[dayOfWeek]?.isOpen) {
+                activeOpeningHours = businessSettings.weeklySchedule[dayOfWeek].shifts;
+              }
 
               const itemStart = item;
               const itemEnd = addHours(item, 1);
@@ -1105,8 +1115,15 @@ const handleSaveCustomerEdits = async () => {
             
             if (!isBreak && !searchTerm && calendarData.type === 'daily') {
               const dateString = format(selectedDate, 'yyyy-MM-dd');
+              const dayOfWeek = getDay(selectedDate);
               const exceptionForToday = specialDays.find(ex => ex.date === dateString);
-              const activeOpeningHours = exceptionForToday?.openingHours || businessSettings.openingHours;
+              
+              let activeOpeningHours: TimeRange[] = [];
+              if (exceptionForToday && !exceptionForToday.isClosed) {
+                activeOpeningHours = exceptionForToday.openingHours?.length ? exceptionForToday.openingHours : (businessSettings.weeklySchedule[dayOfWeek]?.shifts || []);
+              } else if (!exceptionForToday && businessSettings.weeklySchedule[dayOfWeek]?.isOpen) {
+                activeOpeningHours = businessSettings.weeklySchedule[dayOfWeek].shifts;
+              }
 
               const itemStart = item; // Es. 11:00
               const itemEnd = addHours(item, 1); // Es. 12:00
@@ -1794,8 +1811,7 @@ interface ManualBookingModalProps {
   onClose: () => void;
   onSuccess: () => void;
   businessSettings: {
-    openingHours: TimeRange[];
-    closedDays: number[];
+    weeklySchedule: WeeklySchedule;
   };
 }
 
@@ -1949,7 +1965,7 @@ const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
       const dateString = format(d, 'yyyy-MM-dd');
       const exception = specialDays.find(ex => ex.date === dateString);
       if (exception) return !exception.isClosed;
-      return !businessSettings.closedDays.includes(getDay(d));
+      return businessSettings.weeklySchedule[getDay(d)]?.isOpen;
     });
   }, [specialDays, businessSettings]);
 
@@ -1965,7 +1981,7 @@ const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
           return exception.isClosed;
         }
         // 2. Controllo giorni di chiusura standard
-        if (businessSettings.closedDays.includes(getDay(date))) return true;
+        if (!businessSettings.weeklySchedule[getDay(date)]?.isOpen) return true;
         
         return false;
       }
@@ -1986,15 +2002,21 @@ const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
     const dayEnd = endOfDay(selectedDate);
 
     const dateString = format(selectedDate, 'yyyy-MM-dd');
+    const dayOfWeek = getDay(selectedDate);
     const exceptionForToday = specialDays.find(ex => ex.date === dateString);
 
-    if (exceptionForToday?.isClosed || (!exceptionForToday && businessSettings.closedDays.includes(getDay(selectedDate)))) {
+    if (exceptionForToday?.isClosed || (!exceptionForToday && !businessSettings.weeklySchedule[dayOfWeek]?.isOpen)) {
       setAvailableSlots([]);
       setLoading(false);
       return;
     }
 
-    const activeOpeningHours = exceptionForToday?.openingHours || businessSettings.openingHours;
+    let activeOpeningHours: TimeRange[] = [];
+    if (exceptionForToday && !exceptionForToday.isClosed) {
+      activeOpeningHours = exceptionForToday.openingHours?.length ? exceptionForToday.openingHours : (businessSettings.weeklySchedule[dayOfWeek]?.shifts || []);
+    } else {
+      activeOpeningHours = businessSettings.weeklySchedule[dayOfWeek]?.shifts || [];
+    }
 
     try {
       const q = query(
@@ -2108,8 +2130,15 @@ const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
 
     // Troviamo la fine del turno
     const dateString = format(selectedSlot, 'yyyy-MM-dd');
+    const dayOfWeek = getDay(selectedSlot);
     const exception = specialDays.find(ex => ex.date === dateString);
-    const activeHours = exception?.openingHours || businessSettings.openingHours;
+    
+    let activeHours: TimeRange[] = [];
+    if (exception && !exception.isClosed) {
+      activeHours = exception.openingHours?.length ? exception.openingHours : (businessSettings.weeklySchedule[dayOfWeek]?.shifts || []);
+    } else {
+      activeHours = businessSettings.weeklySchedule[dayOfWeek]?.shifts || [];
+    }
     let shiftEnd = dayEnd;
     for (const range of activeHours) {
       const eH = Math.floor(range.end);

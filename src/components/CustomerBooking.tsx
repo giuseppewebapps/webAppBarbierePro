@@ -53,13 +53,12 @@ import {
 import { cn } from '../lib/utils';
 import { 
   SERVICES, 
-  DEFAULT_OPENING_HOURS, 
-  DEFAULT_CLOSED_DAYS, 
+  DEFAULT_WEEKLY_SCHEDULE, 
   COUNTRY_CODES, 
   BARBER_EMAILS, 
   SALON_INFO 
 } from '../constants';
-import { Appointment, Service, RescheduleProposal, SpecialDay, TimeRange } from '../types';
+import { Appointment, Service, RescheduleProposal, SpecialDay, TimeRange, WeeklySchedule } from '../types';
 import { calculateOptimalSlots } from '../utils/slotEngine';
 
 enum OperationType {
@@ -178,13 +177,11 @@ export default function CustomerBooking({
 }: CustomerBookingProps) {
   const { profile } = useAuth();
 
-  // 🚀 STATO DINAMICO IMPOSTAZIONI ORARI (Inizializzato con i Fallback)
+  // 🚀 STATO DINAMICO IMPOSTAZIONI ORARI (Inizializzato con i Fallback a 7 giorni)
   const [businessSettings, setBusinessSettings] = useState<{
-    openingHours: TimeRange[];
-    closedDays: number[];
+    weeklySchedule: WeeklySchedule;
   }>({
-    openingHours: DEFAULT_OPENING_HOURS,
-    closedDays: DEFAULT_CLOSED_DAYS
+    weeklySchedule: DEFAULT_WEEKLY_SCHEDULE
   });
 
   // 🚀 ASCOLTO IN TEMPO REALE DI FIRESTORE
@@ -193,8 +190,7 @@ export default function CustomerBooking({
       if (docSnap.exists()) {
         const data = docSnap.data();
         setBusinessSettings({
-          openingHours: data.openingHours || DEFAULT_OPENING_HOURS,
-          closedDays: data.closedDays || DEFAULT_CLOSED_DAYS
+          weeklySchedule: data.weeklySchedule || DEFAULT_WEEKLY_SCHEDULE
         });
       }
     });
@@ -226,7 +222,7 @@ export default function CustomerBooking({
       const dateString = format(d, 'yyyy-MM-dd');
       const exception = specialDays.find(ex => ex.date === dateString);
       if (exception) return !exception.isClosed;
-      return !businessSettings.closedDays.includes(getDay(d));
+      return businessSettings.weeklySchedule[getDay(d)]?.isOpen;
     });
   }, [todayNormalized, specialDays, businessSettings, maxBookingDate]);
 
@@ -279,8 +275,15 @@ export default function CustomerBooking({
         // 3. Simuliamo il calcolo per ogni singolo giorno della finestra
         for (const day of visibleDays) {
           const dateString = format(day, 'yyyy-MM-dd');
+          const dayOfWeek = getDay(day);
           const exception = specialDays.find(ex => ex.date === dateString);
-          const activeHours = exception?.openingHours || businessSettings.openingHours;
+          
+          let activeHours: TimeRange[] = [];
+          if (exception && !exception.isClosed) {
+            activeHours = exception.openingHours?.length ? exception.openingHours : (businessSettings.weeklySchedule[dayOfWeek]?.shifts || []);
+          } else if (businessSettings.weeklySchedule[dayOfWeek]?.isOpen) {
+            activeHours = businessSettings.weeklySchedule[dayOfWeek].shifts;
+          }
 
           // Filtriamo appuntamenti solo per il giorno ciclato
           const dayStartMs = startOfDay(day).getTime();
@@ -494,15 +497,21 @@ export default function CustomerBooking({
     const dayEnd = endOfDay(selectedDate);
 
     const dateString = format(selectedDate, 'yyyy-MM-dd');
+    const dayOfWeek = getDay(selectedDate);
     const exceptionForToday = specialDays.find(ex => ex.date === dateString);
 
-    if (exceptionForToday?.isClosed || (!exceptionForToday && businessSettings.closedDays.includes(getDay(selectedDate)))) {
+    if (exceptionForToday?.isClosed || (!exceptionForToday && !businessSettings.weeklySchedule[dayOfWeek]?.isOpen)) {
       setAvailableSlots([]);
       setLoading(false);
       return;
     }
 
-    const activeOpeningHours = exceptionForToday?.openingHours || businessSettings.openingHours;
+    let activeOpeningHours: TimeRange[] = [];
+    if (exceptionForToday && !exceptionForToday.isClosed) {
+      activeOpeningHours = exceptionForToday.openingHours?.length ? exceptionForToday.openingHours : (businessSettings.weeklySchedule[dayOfWeek]?.shifts || []);
+    } else {
+      activeOpeningHours = businessSettings.weeklySchedule[dayOfWeek]?.shifts || [];
+    }
 
     try {
       const q = query(
@@ -649,10 +658,18 @@ export default function CustomerBooking({
       }
 
       // 3. Troviamo la fine del turno
-      const dateString = format(selectedSlot, 'yyyy-MM-dd');
-      const exception = specialDays.find(ex => ex.date === dateString);
-      const activeHours = exception?.openingHours || businessSettings.openingHours;
-      let shiftEnd = dayEnd;
+    const dateString = format(selectedSlot, 'yyyy-MM-dd');
+    const dayOfWeek = getDay(selectedSlot);
+    const exception = specialDays.find(ex => ex.date === dateString);
+    
+    let activeHours: TimeRange[] = [];
+    if (exception && !exception.isClosed) {
+      activeHours = exception.openingHours?.length ? exception.openingHours : (businessSettings.weeklySchedule[dayOfWeek]?.shifts || []);
+    } else {
+      activeHours = businessSettings.weeklySchedule[dayOfWeek]?.shifts || [];
+    }
+    
+    let shiftEnd = dayEnd;
       for (const range of activeHours) {
         const eH = Math.floor(range.end);
         const eM = Math.round((range.end - eH) * 60);
@@ -1085,8 +1102,8 @@ export default function CustomerBooking({
         return false; // Domenica aperta e con posti: Rendila cliccabile!
       }
       
-      // 3. Regole Standard di chiusura (es. Domenica e Lunedì)
-      if (businessSettings.closedDays.includes(getDay(date))) return true;
+      // 3. Regole Standard di chiusura granulare
+      if (!businessSettings.weeklySchedule[getDay(date)]?.isOpen) return true;
       
       // 4. Scudo anti-overbooking per i giorni standard
       if (fullyBookedDays.includes(dateString)) return true;
@@ -1707,31 +1724,33 @@ export default function CustomerBooking({
                   <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Orari di Apertura</div>
                 </div>
 
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <div className="flex justify-between items-center p-4 bg-white rounded-2xl shadow-sm border border-gray-100">
-                    <span className="text-gray-500 font-medium">Orari Turni</span>
-                    <div className="text-right">
-                      {businessSettings.openingHours.map((range, i) => {
-                        const startH = Math.floor(range.start);
-                        const startM = Math.round((range.start - startH) * 60);
-                        const endH = Math.floor(range.end);
-                        const endM = Math.round((range.end - endH) * 60);
+                <div className="flex flex-col gap-2">
+                  {[1, 2, 3, 4, 5, 6, 0].map(dayIndex => {
+                    const dayNames = ['Domenica', 'Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato'];
+                    const dayData = businessSettings.weeklySchedule?.[dayIndex];
 
-                        const timeStr = `${String(startH).padStart(2, '0')}:${String(startM).padStart(2, '0')} - ${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}`;
+                    if (!dayData) return null;
 
-                        return <div key={i} className="font-bold text-gray-900 text-xs">{timeStr}</div>;
-                      })}
-                    </div>
-                  </div>
-
-                  <div className="flex justify-between items-center p-4 bg-white rounded-2xl shadow-sm border border-gray-100">
-                    <span className="text-gray-500 font-medium">Giorni di Chiusura</span>
-                    <span className="font-bold text-red-500 text-xs">
-                      {businessSettings.closedDays.length > 0
-                        ? businessSettings.closedDays.map(d => ['Dom', 'Lun', 'Mar', 'Mer', 'Gio', 'Ven', 'Sab'][d]).join(', ')
-                        : 'Nessuno'}
-                    </span>
-                  </div>
+                    return (
+                      <div key={dayIndex} className="flex justify-between items-center p-3 sm:p-4 bg-white rounded-2xl shadow-sm border border-gray-100">
+                        <span className="text-gray-700 font-bold text-sm">{dayNames[dayIndex]}</span>
+                        <div className="text-right">
+                          {!dayData.isOpen || dayData.shifts.length === 0 ? (
+                            <span className="text-xs font-bold text-red-500 uppercase tracking-wider">Chiuso</span>
+                          ) : (
+                            dayData.shifts.map((range, i) => {
+                              const startH = Math.floor(range.start);
+                              const startM = Math.round((range.start - startH) * 60);
+                              const endH = Math.floor(range.end);
+                              const endM = Math.round((range.end - endH) * 60);
+                              const timeStr = `${String(startH).padStart(2, '0')}:${String(startM).padStart(2, '0')} - ${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}`;
+                              return <div key={i} className="font-bold text-gray-900 text-xs">{timeStr}</div>;
+                            })
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             </div>

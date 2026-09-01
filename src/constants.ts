@@ -41,15 +41,19 @@ export const SERVICES: Service[] = [
 ];
 
 // Fallback di default se non presenti su Firestore
-export const DEFAULT_OPENING_HOURS = [
-  { start: 8, end: 13 }, 
-  { start: 15, end: 20 },
-];
-
-export const DEFAULT_CLOSED_DAYS = [0, 1]; // 0 = Domenica, 1 = Lunedì
+export const DEFAULT_WEEKLY_SCHEDULE: WeeklySchedule = {
+  0: { isOpen: false, shifts: [] }, // Domenica: Chiuso
+  1: { isOpen: false, shifts: [] }, // Lunedì: Chiuso
+  2: { isOpen: true, shifts: [{ start: 8, end: 13 }, { start: 15, end: 20 }] }, // Martedì
+  3: { isOpen: true, shifts: [{ start: 8, end: 13 }, { start: 15, end: 20 }] }, // Mercoledì
+  4: { isOpen: true, shifts: [{ start: 8, end: 13 }, { start: 15, end: 20 }] }, // Giovedì
+  5: { isOpen: true, shifts: [{ start: 8, end: 13 }, { start: 15, end: 20 }] }, // Venerdì
+  6: { isOpen: true, shifts: [{ start: 8, end: 13 }, { start: 15, end: 20 }] }  // Sabato
+};
 
 export const BARBER_EMAILS = [
   'do.maldera@libero.it',
+  'sminghioni.holding@gmail.com',
   'eaglewealth.fs@gmail.com',
   'malderadomenico98@gmail.com',
 ];

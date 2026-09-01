@@ -1,27 +1,28 @@
 import React, { useState, useEffect } from 'react';
 import { doc, getDoc, setDoc, Timestamp } from 'firebase/firestore';
 import { db } from '../firebase';
-import { DEFAULT_OPENING_HOURS, DEFAULT_CLOSED_DAYS } from '../constants';
-import { TimeRange } from '../types';
-import { XCircle, Check, Clock, Calendar, ArrowLeft } from 'lucide-react';
+import { DEFAULT_WEEKLY_SCHEDULE } from '../constants';
+import { WeeklySchedule, TimeRange } from '../types';
+import { XCircle, Check, Calendar, ArrowLeft, Plus, Trash2 } from 'lucide-react';
+import { cn } from '../lib/utils';
 
 interface ScheduleSettingsModalProps {
   onClose: () => void;
 }
 
+// Ordinati da Lunedì a Domenica per la UI italiana
 const DAYS_OF_WEEK = [
-  { id: 0, label: 'Domenica' },
   { id: 1, label: 'Lunedì' },
   { id: 2, label: 'Martedì' },
   { id: 3, label: 'Mercoledì' },
   { id: 4, label: 'Giovedì' },
   { id: 5, label: 'Venerdì' },
   { id: 6, label: 'Sabato' },
+  { id: 0, label: 'Domenica' },
 ];
 
 export default function ScheduleSettingsModal({ onClose }: ScheduleSettingsModalProps) {
-  const [openingHours, setOpeningHours] = useState<TimeRange[]>(DEFAULT_OPENING_HOURS);
-  const [closedDays, setClosedDays] = useState<number[]>(DEFAULT_CLOSED_DAYS);
+  const [schedule, setSchedule] = useState<WeeklySchedule>(DEFAULT_WEEKLY_SCHEDULE);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -44,8 +45,22 @@ export default function ScheduleSettingsModal({ onClose }: ScheduleSettingsModal
         const docSnap = await getDoc(doc(db, 'settings', 'business_hours'));
         if (docSnap.exists()) {
           const data = docSnap.data();
-          if (data.openingHours) setOpeningHours(data.openingHours);
-          if (data.closedDays) setClosedDays(data.closedDays);
+          
+          if (data.weeklySchedule) {
+            // Se esiste già la nuova struttura, la carica
+            setSchedule(data.weeklySchedule);
+          } else if (data.openingHours && data.closedDays) {
+            // 🚀 MIGRATOR AUTOMATICO: Converte i vecchi dati monolitici nella nuova mappa 7-day
+            const migratedSchedule: WeeklySchedule = { ...DEFAULT_WEEKLY_SCHEDULE };
+            for (let i = 0; i <= 6; i++) {
+              const isClosed = data.closedDays.includes(i);
+              migratedSchedule[i] = {
+                isOpen: !isClosed,
+                shifts: !isClosed ? [...data.openingHours] : []
+              };
+            }
+            setSchedule(migratedSchedule);
+          }
         }
       } catch (err) {
         console.error("Errore caricamento impostazioni orario:", err);
@@ -60,10 +75,9 @@ export default function ScheduleSettingsModal({ onClose }: ScheduleSettingsModal
     setSaving(true);
     try {
       await setDoc(doc(db, 'settings', 'business_hours'), {
-        openingHours,
-        closedDays,
+        weeklySchedule: schedule,
         updatedAt: Timestamp.now()
-      });
+      }, { merge: true });
       alert('Orari standard salvati con successo!');
       onClose();
     } catch (err) {
@@ -74,23 +88,58 @@ export default function ScheduleSettingsModal({ onClose }: ScheduleSettingsModal
     }
   };
 
-  const toggleClosedDay = (dayId: number) => {
-    setClosedDays(prev =>
-      prev.includes(dayId) ? prev.filter(d => d !== dayId) : [...prev, dayId]
-    );
+  const toggleDayOpen = (dayId: number) => {
+    setSchedule(prev => {
+      const isCurrentlyOpen = prev[dayId].isOpen;
+      return {
+        ...prev,
+        [dayId]: {
+          ...prev[dayId],
+          isOpen: !isCurrentlyOpen,
+          // Se lo stiamo aprendo e non ha turni, diamo un orario base per comodità
+          shifts: !isCurrentlyOpen && prev[dayId].shifts.length === 0 
+            ? [{ start: 8, end: 13 }, { start: 15, end: 20 }] 
+            : prev[dayId].shifts
+        }
+      };
+    });
   };
 
-  const updateRange = (index: number, field: 'start' | 'end', val: number) => {
-    setOpeningHours(prev => {
-      const copy = [...prev];
-      copy[index] = { ...copy[index], [field]: val };
-      return copy;
+  const updateShift = (dayId: number, shiftIndex: number, field: 'start' | 'end', val: number) => {
+    setSchedule(prev => {
+      const newShifts = [...prev[dayId].shifts];
+      newShifts[shiftIndex] = { ...newShifts[shiftIndex], [field]: val };
+      return {
+        ...prev,
+        [dayId]: { ...prev[dayId], shifts: newShifts }
+      };
+    });
+  };
+
+  const addShift = (dayId: number) => {
+    setSchedule(prev => ({
+      ...prev,
+      [dayId]: {
+        ...prev[dayId],
+        shifts: [...prev[dayId].shifts, { start: 14, end: 20 }] // Default per un nuovo turno
+      }
+    }));
+  };
+
+  const removeShift = (dayId: number, shiftIndex: number) => {
+    setSchedule(prev => {
+      const newShifts = [...prev[dayId].shifts];
+      newShifts.splice(shiftIndex, 1);
+      return {
+        ...prev,
+        [dayId]: { ...prev[dayId], shifts: newShifts }
+      };
     });
   };
 
   return (
     <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in">
-      <div className="bg-white rounded-[32px] w-full max-w-lg overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
+      <div className="bg-white rounded-[32px] w-full max-w-2xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
         {/* HEADER CON BOTTONE TORNA INDIETRO */}
         <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
           <div className="flex items-center gap-3">
@@ -114,77 +163,84 @@ export default function ScheduleSettingsModal({ onClose }: ScheduleSettingsModal
         {loading ? (
           <div className="p-12 text-center text-gray-400 font-medium">Caricamento...</div>
         ) : (
-          <div className="p-6 space-y-8 overflow-y-auto flex-1">
-            {/* GIORNI DI CHIUSURA */}
-            <section>
-              <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-4 flex items-center gap-2">
-                <Calendar size={14} /> Giorni di Chiusura
-              </h3>
-              <div className="flex flex-wrap gap-2">
-                {DAYS_OF_WEEK.map(day => {
-                  const isClosed = closedDays.includes(day.id);
-                  return (
-                    <button
-                      key={day.id}
-                      type="button"
-                      onClick={() => toggleClosedDay(day.id)}
-                      className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all border ${
-                        isClosed
-                          ? "bg-red-500 text-white border-red-500 shadow-sm"
-                          : "bg-gray-50 text-gray-700 border-gray-200 hover:border-gray-300"
-                      }`}
-                    >
-                      {day.label} {isClosed ? '(Chiuso)' : ''}
-                    </button>
-                  );
-                })}
-              </div>
-            </section>
-
-            {/* FASCE ORARIE CON TENDINA */}
-            <section>
-              <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-4 flex items-center gap-2">
-                <Clock size={14} /> Fasce Orarie
-              </h3>
-              <div className="space-y-4">
-                {openingHours.map((range, idx) => (
-                  <div key={idx} className="p-4 bg-gray-50 rounded-2xl border border-gray-100 space-y-3">
-                    <span className="text-xs font-bold text-gray-400 uppercase">Turno {idx + 1}</span>
-                    <div className="flex items-center gap-4">
-                      <div className="flex-1">
-                        <label className="text-[10px] text-gray-400 font-bold block mb-1">Apertura</label>
-                        <select 
-                          value={range.start} 
-                          onChange={e => updateRange(idx, 'start', Number(e.target.value))} 
-                          className="w-full p-2.5 border border-gray-200 rounded-xl text-center font-bold text-sm outline-none focus:border-black appearance-none bg-white cursor-pointer"
-                        >
-                          {timeOptions.map(opt => (
-                            <option key={`start-${idx}-${opt.value}`} value={opt.value}>
-                              {opt.label}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <span className="text-sm font-medium text-gray-500 mt-4">fino alle</span>
-                      <div className="flex-1">
-                        <label className="text-[10px] text-gray-400 font-bold block mb-1">Chiusura</label>
-                        <select 
-                          value={range.end} 
-                          onChange={e => updateRange(idx, 'end', Number(e.target.value))} 
-                          className="w-full p-2.5 border border-gray-200 rounded-xl text-center font-bold text-sm outline-none focus:border-black appearance-none bg-white cursor-pointer"
-                        >
-                          {timeOptions.map(opt => (
-                            <option key={`end-${idx}-${opt.value}`} value={opt.value}>
-                              {opt.label}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
+          <div className="p-4 sm:p-6 space-y-4 overflow-y-auto flex-1 bg-white scrollbar-thin scrollbar-thumb-gray-200">
+            {DAYS_OF_WEEK.map(day => {
+              const dayData = schedule[day.id];
+              return (
+                <div key={day.id} className={cn("rounded-2xl border transition-all duration-300", dayData.isOpen ? "bg-white border-gray-200 shadow-sm" : "bg-gray-50 border-gray-100 grayscale-[0.5]")}>
+                  
+                  {/* Intestazione del Giorno */}
+                  <div className="p-4 flex items-center justify-between cursor-pointer" onClick={() => toggleDayOpen(day.id)}>
+                    <div className="flex items-center gap-3">
+                      <div className={cn("w-2 h-2 rounded-full", dayData.isOpen ? "bg-emerald-500" : "bg-red-500")} />
+                      <span className="font-bold text-gray-800 uppercase tracking-wider text-sm">{day.label}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className={cn("text-xs font-bold", dayData.isOpen ? "text-emerald-600" : "text-gray-400")}>
+                        {dayData.isOpen ? "APERTO" : "CHIUSO"}
+                      </span>
+                      <input 
+                        type="checkbox" 
+                        checked={dayData.isOpen} 
+                        onChange={() => toggleDayOpen(day.id)}
+                        className="w-5 h-5 rounded cursor-pointer accent-black"
+                        onClick={(e) => e.stopPropagation()} // Evita il doppio click col div padre
+                      />
                     </div>
                   </div>
-                ))}
-              </div>
-            </section>
+
+                  {/* Fasce Orarie (Visibili solo se aperto) */}
+                  {dayData.isOpen && (
+                    <div className="px-4 pb-4 space-y-3 animate-in fade-in slide-in-from-top-2">
+                      <div className="w-full h-px bg-gray-100 mb-2"></div>
+                      
+                      {dayData.shifts.map((shift, idx) => (
+                        <div key={idx} className="flex flex-col sm:flex-row sm:items-center gap-2 p-3 bg-gray-50 rounded-xl border border-gray-100">
+                          <span className="text-[10px] font-bold text-gray-400 uppercase w-14">Turno {idx + 1}</span>
+                          
+                          <div className="flex items-center flex-1 gap-2">
+                            <select 
+                              value={shift.start} 
+                              onChange={e => updateShift(day.id, idx, 'start', Number(e.target.value))} 
+                              className="flex-1 p-2 border border-gray-200 rounded-lg text-center font-bold text-sm outline-none focus:border-black appearance-none bg-white cursor-pointer"
+                            >
+                              {timeOptions.map(opt => <option key={`start-${idx}-${opt.value}`} value={opt.value}>{opt.label}</option>)}
+                            </select>
+                            
+                            <span className="text-xs font-medium text-gray-500">al</span>
+                            
+                            <select 
+                              value={shift.end} 
+                              onChange={e => updateShift(day.id, idx, 'end', Number(e.target.value))} 
+                              className="flex-1 p-2 border border-gray-200 rounded-lg text-center font-bold text-sm outline-none focus:border-black appearance-none bg-white cursor-pointer"
+                            >
+                              {timeOptions.map(opt => <option key={`end-${idx}-${opt.value}`} value={opt.value}>{opt.label}</option>)}
+                            </select>
+                          </div>
+
+                          <button 
+                            onClick={() => removeShift(day.id, idx)}
+                            className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors ml-auto"
+                            title="Elimina turno"
+                          >
+                            <Trash2 size={18} />
+                          </button>
+                        </div>
+                      ))}
+
+                      {dayData.shifts.length < 3 && ( // Limite ragionevole a 3 turni giornalieri
+                        <button 
+                          onClick={() => addShift(day.id)}
+                          className="w-full py-2.5 border-2 border-dashed border-gray-200 text-gray-500 rounded-xl text-xs font-bold hover:border-black hover:text-black transition-all flex items-center justify-center gap-2"
+                        >
+                          <Plus size={16} /> Aggiungi Fascia Oraria
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
 

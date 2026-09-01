@@ -85,9 +85,16 @@ export interface TimeRange {
   end: number;   // es. 13.75 per le 13:45
 }
 
+// 🚀 NUOVE INTERFACCE PER L'ORARIO GRANULARE GIORNALIERO
+export interface DaySchedule {
+  isOpen: boolean;
+  shifts: TimeRange[];
+}
+
+export type WeeklySchedule = Record<number, DaySchedule>; // Chiave: 0 (Domenica) -> 6 (Sabato)
+
 export interface BusinessSettings {
-  openingHours: TimeRange[];
-  closedDays: number[]; // 0 = Domenica, 1 = Lunedì, ecc.
+  weeklySchedule: WeeklySchedule;
   updatedAt?: any;
 }
 
