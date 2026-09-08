@@ -1657,7 +1657,7 @@ export default function CustomerBooking({
                             <span className="font-bold">Chiama ora</span>
                           </a>
                           <a 
-                            href="https://wa.me/390123456789"
+                            href={`https://wa.me/${SALON_INFO.whatsapp}`}
                             target="_blank"
                             rel="noreferrer"
                             className="flex items-center gap-3 p-4 hover:bg-gray-50 transition-colors"

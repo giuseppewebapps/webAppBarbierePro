@@ -7,6 +7,7 @@ import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   updateProfile,
+  sendPasswordResetEmail,
   User as FirebaseUser
 } from 'firebase/auth';
 import { 
@@ -65,6 +66,27 @@ export default function App() {
   const [password, setPassword] = useState('');
   const [isLoginMode, setIsLoginMode] = useState(true);
   const [authError, setAuthError] = useState('');
+
+  const [resetMessage, setResetMessage] = useState('');
+
+  const handlePasswordReset = async () => {
+    setAuthError('');
+    setResetMessage('');
+    if (!email) {
+      setAuthError('Inserisci la tua email nel campo qui sopra per recuperare la password.');
+      return;
+    }
+    try {
+      auth.languageCode = 'it'; // 🚀 Forza la lingua italiana per l'email
+      await sendPasswordResetEmail(auth, email);
+      setResetMessage('Ti abbiamo inviato un\'email con le istruzioni per ripristinare la password.');
+    } catch (error: any) {
+      console.error('Password reset error:', error);
+      if (error.code === 'auth/invalid-email') setAuthError('Formato email non valido.');
+      else if (error.code === 'auth/user-not-found') setAuthError('Nessun account nativo trovato con questa email.');
+      else setAuthError("Errore durante l'invio dell'email di recupero. Riprova.");
+    }
+  };
 
   // Stati per la modale del numero di telefono obbligatorio
   const [showPhoneModal, setShowMandatoryPhoneModal] = useState(false);
@@ -310,6 +332,11 @@ export default function App() {
                     {authError}
                   </div>
                 )}
+                {resetMessage && (
+                  <div className="mb-4 p-3 bg-emerald-100 text-emerald-700 rounded-xl text-sm text-center font-medium">
+                    {resetMessage}
+                  </div>
+                )}
 
                 <form onSubmit={handleEmailAuth} className="flex flex-col gap-4 mb-6">
                   {!isLoginMode && (
@@ -354,6 +381,17 @@ export default function App() {
                     className="w-full p-4 rounded-2xl border border-gray-200 focus:outline-none focus:border-black transition-colors"
                     required
                   />
+                  {isLoginMode && (
+                    <div className="flex justify-end -mt-2">
+                      <button
+                        type="button"
+                        onClick={handlePasswordReset}
+                        className="text-xs text-gray-500 hover:text-black font-medium transition-colors"
+                      >
+                        Hai dimenticato la password?
+                      </button>
+                    </div>
+                  )}
                   <button
                     type="submit"
                     className="w-full py-4 bg-black text-white rounded-2xl font-bold hover:bg-gray-800 transition-all shadow-xl hover:scale-[1.02] active:scale-[0.98]"
