@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { doc, setDoc, getDoc, deleteDoc } from 'firebase/firestore';
+import { doc, setDoc, getDoc, deleteDoc, collection, query, where, getDocs, Timestamp } from 'firebase/firestore';
 import { db } from '../firebase';
-import { format } from 'date-fns';
+import { format, startOfDay, endOfDay } from 'date-fns';
 import { it } from 'date-fns/locale';
 import { DayPicker } from 'react-day-picker';
 import ScheduleSettingsModal from './ScheduleSettingsModal';
@@ -77,13 +77,58 @@ export default function ScheduleMaintenanceModal({ onClose }: Props) {
     setLoading(true);
     const dateString = format(selectedDate, 'yyyy-MM-dd');
     
-    const openingHours = [];
+    const openingHours: { start: number, end: number }[] = [];
     if (!isClosed) {
       openingHours.push({ start: shift1Start, end: shift1End });
       if (hasShift2) {
         openingHours.push({ start: shift2Start, end: shift2End });
       }
     }
+
+    // 🚀 SCUDO ANTI-CONFLITTO
+    try {
+      const dayStart = startOfDay(selectedDate);
+      const dayEnd = endOfDay(selectedDate);
+      const qApps = query(
+        collection(db, 'appointments'),
+        where('startTime', '>=', Timestamp.fromDate(dayStart)),
+        where('startTime', '<=', Timestamp.fromDate(dayEnd)),
+        where('status', '==', 'booked')
+      );
+      const snapApps = await getDocs(qApps);
+      const dayApps = snapApps.docs.map(d => d.data() as any);
+
+      if (dayApps.length > 0) {
+        if (isClosed) {
+          alert(`Impossibile chiudere: ci sono ${dayApps.length} appuntamenti già confermati! Spostali o annullali prima di chiudere la giornata.`);
+          setLoading(false);
+          return;
+        }
+
+        let hasConflict = false;
+        for (const app of dayApps) {
+          const appStart = app.startTime.toDate();
+          const appEnd = app.endTime.toDate();
+          const startDec = appStart.getHours() + appStart.getMinutes() / 60;
+          const endDec = appEnd.getHours() + appEnd.getMinutes() / 60;
+
+          const fits = openingHours.some(shift => startDec >= shift.start && endDec <= shift.end);
+          if (!fits) {
+            hasConflict = true;
+            break;
+          }
+        }
+
+        if (hasConflict) {
+          alert("Impossibile salvare: alcuni appuntamenti già fissati cadono fuori dalle nuove fasce orarie che stai cercando di impostare.");
+          setLoading(false);
+          return;
+        }
+      }
+    } catch (e) {
+      console.error("Errore controllo conflitti:", e);
+    }
+    // Fine Scudo
 
     const specialDayData: SpecialDay = {
       date: dateString,
