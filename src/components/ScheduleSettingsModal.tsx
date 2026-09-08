@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { doc, getDoc, setDoc, Timestamp } from 'firebase/firestore';
+import { doc, getDoc, setDoc, Timestamp, collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
 import { DEFAULT_WEEKLY_SCHEDULE } from '../constants';
-import { WeeklySchedule, TimeRange } from '../types';
+import { WeeklySchedule, TimeRange, SpecialDay } from '../types';
 import { XCircle, Check, Calendar, ArrowLeft, Plus, Trash2 } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { format, getDay } from 'date-fns';
+import { it } from 'date-fns/locale';
 
 interface ScheduleSettingsModalProps {
   onClose: () => void;
@@ -74,10 +76,63 @@ export default function ScheduleSettingsModal({ onClose }: ScheduleSettingsModal
   const handleSave = async () => {
     setSaving(true);
     try {
+      // 🚀 SCUDO ANTI-CONFLITTO GLOBALE
+      const now = new Date();
+      
+      const exceptionsSnap = await getDocs(collection(db, 'calendar_exceptions'));
+      const exceptions = exceptionsSnap.docs.map(d => d.data() as SpecialDay);
+
+      const qApps = query(
+        collection(db, 'appointments'),
+        where('startTime', '>=', Timestamp.fromDate(now)),
+        where('status', '==', 'booked')
+      );
+      const snapApps = await getDocs(qApps);
+      const futureApps = snapApps.docs.map(d => d.data() as any);
+
+      let conflictFound = false;
+      let conflictMsg = "";
+
+      for (const app of futureApps) {
+        const appStart = app.startTime.toDate();
+        const appEnd = app.endTime.toDate();
+        const dateString = format(appStart, 'yyyy-MM-dd');
+        
+        // Ignora i giorni che hanno un'eccezione specifica salvata
+        if (exceptions.some(ex => ex.date === dateString)) continue;
+
+        const dayOfWeek = getDay(appStart);
+        const dayConfig = schedule[dayOfWeek];
+
+        if (!dayConfig.isOpen) {
+          conflictFound = true;
+          conflictMsg = `Hai un appuntamento il ${format(appStart, 'EEEE d MMMM', {locale: it})}, ma stai impostando i ${format(appStart, 'EEEE', {locale: it})} come CHIUSI.`;
+          break;
+        }
+
+        const startDec = appStart.getHours() + appStart.getMinutes() / 60;
+        const endDec = appEnd.getHours() + appEnd.getMinutes() / 60;
+
+        const fits = dayConfig.shifts.some(shift => startDec >= shift.start && endDec <= shift.end);
+        if (!fits) {
+          conflictFound = true;
+          conflictMsg = `L'appuntamento del ${format(appStart, 'dd/MM/yyyy')} alle ${format(appStart, 'HH:mm')} cade fuori dai nuovi turni inseriti per i ${format(appStart, 'EEEE', {locale: it})}.`;
+          break;
+        }
+      }
+
+      if (conflictFound) {
+        alert(`IMPOSSIBILE SALVARE:\n\n${conflictMsg}\n\nSposta o annulla l'appuntamento prima di restringere l'orario standard.`);
+        setSaving(false);
+        return;
+      }
+      // Fine Scudo
+
       await setDoc(doc(db, 'settings', 'business_hours'), {
         weeklySchedule: schedule,
         updatedAt: Timestamp.now()
       }, { merge: true });
+      
       alert('Orari standard salvati con successo!');
       onClose();
     } catch (err) {
