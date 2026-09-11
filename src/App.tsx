@@ -35,6 +35,7 @@ import { autoLinkAppointments } from './utils/appointmentLinker';
 import { logSystemError } from './utils/logger';
 import { getTenantId } from './utils/tenantResolver';
 import { AuthContext } from './context/AuthContext';
+import { useSalonSettings } from './hooks/useSalonSettings';
 
 export default function App() {
   const [user, setUser] = useState<FirebaseUser | null>(null);
@@ -46,7 +47,14 @@ export default function App() {
   const [selectedNotificationType, setSelectedNotificationType] = useState<string | null>(null);
   
   const tenantId = getTenantId();
-  
+  const { settings: salonSettings } = useSalonSettings(tenantId);
+
+  useEffect(() => {
+    if (salonSettings?.name) {
+      document.title = `${salonSettings.name}`;
+    }
+  }, [salonSettings]);
+
   // 🚀 Nome dinamico del salone basato sul tenant (es: "medo-hair" -> "Medo Hair")
   const salonName = tenantId.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
 
@@ -305,8 +313,16 @@ export default function App() {
             <div className="flex flex-col items-center justify-center min-h-screen p-4">
               <div className="bg-white/90 backdrop-blur-md p-8 sm:p-12 rounded-[40px] border border-white/20 shadow-2xl w-full max-w-md">
                 <div className="mb-8 text-center">
-                  <div className="w-20 h-20 bg-black text-white rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-lg">
-                    <Scissors size={40} />
+                  <div className="w-20 h-20 bg-black text-white rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-lg overflow-hidden">
+                    {salonSettings?.logoUrl ? (
+                      <img
+                        src={salonSettings.logoUrl}
+                        alt={salonSettings.name || 'Logo Salone'}
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <Scissors size={40} />
+                    )}
                   </div>
                   <h1 className="text-3xl font-bold tracking-tight text-black">{salonName}</h1>
                   <p className="text-gray-600 mt-2 text-sm font-medium">Accedi o registrati per prenotare</p>
@@ -418,9 +434,17 @@ export default function App() {
               <header className="bg-black/80 backdrop-blur-md text-white sticky top-0 z-[100] shadow-xl border-b border-white/10">
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
                   <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 bg-white/10 rounded-xl flex items-center justify-center">
-                      <Scissors size={24} className="text-white" />
-                    </div>
+                      <div className="w-10 h-10 bg-white/10 rounded-xl flex items-center justify-center overflow-hidden">
+                        {salonSettings?.logoUrl ? (
+                          <img
+                            src={salonSettings.logoUrl}
+                            alt={salonSettings.name || 'Logo Salone'}
+                            className="w-full h-full object-cover"
+                          />
+                        ) : (
+                          <Scissors size={24} className="text-white" />
+                        )}
+                      </div>
                     <div>
                       <h1 className="text-lg font-bold tracking-tight">{salonName}</h1>
                       <p className="text-[10px] text-gray-400 uppercase tracking-widest">
