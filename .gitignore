@@ -9,11 +9,4 @@ coverage/
 !.env.example
 .vscode/launch.json
 agenda.ics
-migrate.cjs
-rollback.cjs
-serviceAccountKey.json
-cleanupUsers.cjs
-deduplicateAppointments.cjs
-cleanupDatabase.cjs
-populateFakeAppointments.cjs
-forceLogoutAllUsers.cjs
+migrations/

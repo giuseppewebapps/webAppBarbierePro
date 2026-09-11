@@ -13,7 +13,7 @@ import {
   deleteDoc
 } from 'firebase/firestore';
 import { db, auth } from '../firebase';
-import { useAuth } from '../App';
+import { useAuth } from '../context/AuthContext';
 import { notifySystemByEmail } from '../utils/emailNotifier';
 import { 
   format, 
@@ -91,7 +91,6 @@ interface CustomerBookingProps {
   onAppointmentDialogClose?: () => void;
 }
 
-// Helper component for Appointment Ticket
 const AppointmentTicket: React.FC<{ 
   app: Appointment, 
   onCancel?: (app: Appointment) => void,
@@ -175,18 +174,19 @@ export default function CustomerBooking({
   selectedAppointmentId,
   onAppointmentDialogClose
 }: CustomerBookingProps) {
-  const { profile } = useAuth();
+  // 🚀 ESTRAZIONE TENANT ID DAL CONTESTO
+  const { profile, tenantId } = useAuth();
 
-  // 🚀 STATO DINAMICO IMPOSTAZIONI ORARI (Inizializzato con i Fallback a 7 giorni)
   const [businessSettings, setBusinessSettings] = useState<{
     weeklySchedule: WeeklySchedule;
   }>({
     weeklySchedule: DEFAULT_WEEKLY_SCHEDULE
   });
 
-  // 🚀 ASCOLTO IN TEMPO REALE DI FIRESTORE
+  // 🚀 QUERY MULTI-TENANT: Impostazioni Orari
   useEffect(() => {
-    const unsubscribe = onSnapshot(doc(db, 'settings', 'business_hours'), (docSnap) => {
+    if (!tenantId) return;
+    const unsubscribe = onSnapshot(doc(db, 'salons', tenantId, 'settings', 'business_hours'), (docSnap) => {
       if (docSnap.exists()) {
         const data = docSnap.data();
         setBusinessSettings({
@@ -195,12 +195,11 @@ export default function CustomerBooking({
       }
     });
     return () => unsubscribe();
-  }, []);
+  }, [tenantId]);
 
   const [selectedServices, setSelectedServices] = useState<Service[]>([]);
   const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
   
-// 🚀 1. Limiti Assoluti di Prenotazione (30 giorni / 1 mese) - CONGELATI IN RAM
   const MAX_BOOKING_DAYS = 30;
   const { todayNormalized, maxBookingDate } = useMemo(() => {
     const today = startOfDay(new Date());
@@ -210,7 +209,6 @@ export default function CustomerBooking({
     };
   }, []); 
 
-  // 🚀 2. Finestra visibile (Scansiona l'intero range di 30 giorni)
   const visibleDays = useMemo(() => {
     const days = eachDayOfInterval({
       start: todayNormalized,
@@ -230,14 +228,13 @@ export default function CustomerBooking({
   const [availableSlots, setAvailableSlots] = useState<Date[]>([]);
   const [selectedSlot, setSelectedSlot] = useState<Date | null>(null);
 
-  // 🚀 STATI PER LO SCANNER DEI GIORNI PIENI
   const [fullyBookedDays, setFullyBookedDays] = useState<string[]>([]);
   const [isScanningDays, setIsScanningDays] = useState(false);
 
-  // 🚀 MOTORE DI SCANSIONE IN BACKGROUND
+  // 🚀 QUERY MULTI-TENANT: Scansione giorni pieni
   useEffect(() => {
+    if (!tenantId) return;
     const scanVisibleDays = async () => {
-      // Se non ha scelto servizi o non ci sono giorni visibili, non oscuriamo nulla
       if (selectedServices.length === 0 || visibleDays.length === 0) {
         setFullyBookedDays([]);
         return;
@@ -248,9 +245,8 @@ export default function CustomerBooking({
         const windowStartMs = startOfDay(visibleDays[0]);
         const windowEndMs = endOfDay(visibleDays[visibleDays.length - 1]);
 
-        // 1. Facciamo UNA SOLA query Firebase per tutta la finestra di 14 giorni
         const q = query(
-          collection(db, 'appointments'),
+          collection(db, 'salons', tenantId, 'appointments'),
           where('startTime', '>=', Timestamp.fromDate(windowStartMs)),
           where('startTime', '<=', Timestamp.fromDate(windowEndMs)),
           where('status', '==', 'booked')
@@ -258,7 +254,6 @@ export default function CustomerBooking({
         const snap = await getDocs(q);
         const windowApps = snap.docs.map(doc => doc.data() as Appointment);
 
-        // 2. Prepariamo i parametri dell'algoritmo
         const totalDuration = selectedServices.reduce((acc, s) => acc + s.duration, 0);
         const totalFlexibility = selectedServices.reduce((acc, s) => acc + (s.flexibility || 0), 0);
         const requestedService = { id: 'combo', duration: totalDuration, flexibility: totalFlexibility };
@@ -272,7 +267,6 @@ export default function CustomerBooking({
         const busyDays: string[] = [];
         const now = new Date();
 
-        // 3. Simuliamo il calcolo per ogni singolo giorno della finestra
         for (const day of visibleDays) {
           const dateString = format(day, 'yyyy-MM-dd');
           const dayOfWeek = getDay(day);
@@ -285,7 +279,6 @@ export default function CustomerBooking({
             activeHours = businessSettings.weeklySchedule[dayOfWeek].shifts;
           }
 
-          // Filtriamo appuntamenti solo per il giorno ciclato
           const dayStartMs = startOfDay(day).getTime();
           const dayEndMs = endOfDay(day).getTime();
           const dayApps = windowApps.filter(app => {
@@ -303,7 +296,6 @@ export default function CustomerBooking({
 
           let slotsFound = 0;
 
-          // Calcoliamo gli slot per ogni turno di quel giorno
           activeHours.forEach(range => {
             const sH = Math.floor(range.start);
             const sM = Math.round((range.start - sH) * 60);
@@ -315,12 +307,10 @@ export default function CustomerBooking({
 
             const slots = calculateOptimalSlots(requestedService, mappedCatalog, dayApps, { start: shiftStart, end: shiftEnd });
             
-            // Se è oggi, scartiamo gli slot passati per non dare falsi positivi
             const validSlots = isSameDay(day, now) ? slots.filter(s => isAfter(s, now)) : slots;
             slotsFound += validSlots.length;
           });
 
-          // Se per questo giorno, con questo specifico servizio, ci sono 0 slot... lo dichiariamo PIENO!
           if (slotsFound === 0) {
             busyDays.push(dateString);
           }
@@ -335,7 +325,7 @@ export default function CustomerBooking({
     };
 
     scanVisibleDays();
-  }, [selectedServices, visibleDays, businessSettings, specialDays]);
+  }, [selectedServices, visibleDays, businessSettings, specialDays, tenantId]);
   
   const [phonePrefix, setPhonePrefix] = useState('+39');
   const [phoneNumber, setPhoneNumber] = useState('');
@@ -361,7 +351,6 @@ export default function CustomerBooking({
   const [friendPhone, setFriendPhone] = useState('');
 
   const [showPhoneUpdatePopup, setShowPhoneUpdatePopup] = useState(false);
-  const [showCalendar, setShowCalendar] = useState(false);
   const [newPhoneNumberToUpdate, setNewPhoneNumberToUpdate] = useState<string | null>(null);
   const [showContactMenu, setShowContactMenu] = useState(false);
   const [highlightedAppId, setHighlightedAppId] = useState<string | null>(null);
@@ -378,10 +367,11 @@ export default function CustomerBooking({
     }
   }, [profile]);
 
+  // 🚀 QUERY MULTI-TENANT: I miei appuntamenti
   useEffect(() => {
-    if (!profile) return;
+    if (!profile || !tenantId) return;
     const q = query(
-      collection(db, 'appointments'),
+      collection(db, 'salons', tenantId, 'appointments'),
       where('customerId', '==', profile.uid)
     );
 
@@ -394,12 +384,13 @@ export default function CustomerBooking({
     });
 
     return () => unsubscribe();
-  }, [profile]);
+  }, [profile, tenantId]);
 
+  // 🚀 QUERY MULTI-TENANT: Proposte di modifica orario
   useEffect(() => {
-    if (!profile) return;
+    if (!profile || !tenantId) return;
     const q = query(
-      collection(db, 'rescheduleProposals'),
+      collection(db, 'salons', tenantId, 'rescheduleProposals'),
       where('status', '==', 'active')
     );
 
@@ -432,7 +423,7 @@ export default function CustomerBooking({
           if (onProposalDialogClose) onProposalDialogClose();
         } else {
           const checkInactive = async () => {
-            const docSnap = await getDoc(doc(db, 'rescheduleProposals', selectedProposalIdFromNotification));
+            const docSnap = await getDoc(doc(db, 'salons', tenantId, 'rescheduleProposals', selectedProposalIdFromNotification));
             if (docSnap.exists()) {
               const data = docSnap.data() as RescheduleProposal;
               if (data.status !== 'active') {
@@ -449,7 +440,7 @@ export default function CustomerBooking({
     });
 
     return () => unsubscribe();
-  }, [profile, selectedProposalIdFromNotification]);
+  }, [profile, selectedProposalIdFromNotification, selectedProposal, onProposalDialogClose, tenantId]);
 
   useEffect(() => {
     if (selectedDate && selectedServices.length > 0) {
@@ -479,8 +470,10 @@ export default function CustomerBooking({
     }
   }, [selectedAppointmentId, onAppointmentDialogClose]);
 
+  // 🚀 QUERY MULTI-TENANT: Eccezioni calendario
   useEffect(() => {
-    const q = query(collection(db, 'calendar_exceptions'));
+    if (!tenantId) return;
+    const q = query(collection(db, 'salons', tenantId, 'calendar_exceptions'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const docs = snapshot.docs.map(doc => ({
         id: doc.id,
@@ -489,9 +482,10 @@ export default function CustomerBooking({
       setSpecialDays(docs);
     });
     return () => unsubscribe();
-  }, []);
+  }, [tenantId]);
 
   const calculateSlots = async () => {
+    if (!tenantId) return;
     setLoading(true);
     const dayStart = startOfDay(selectedDate);
     const dayEnd = endOfDay(selectedDate);
@@ -515,7 +509,7 @@ export default function CustomerBooking({
 
     try {
       const q = query(
-        collection(db, 'appointments'),
+        collection(db, 'salons', tenantId, 'appointments'),
         where('startTime', '>=', Timestamp.fromDate(dayStart)),
         where('startTime', '<=', Timestamp.fromDate(dayEnd))
       );
@@ -524,25 +518,22 @@ export default function CustomerBooking({
         .map(doc => doc.data() as Appointment)
         .filter(app => app.status === 'booked');
 
-      // Adapter: Mappatura appuntamenti esistenti con calcolo dello "stato di stress" (isCompressed)
       const mappedAppointments = dayAppointments.map(app => {
         const actualDuration = (app.endTime.toDate().getTime() - app.startTime.toDate().getTime()) / 60000;
         const nominalDuration = app.services.reduce((acc, s) => acc + s.duration, 0);
         return {
           start: app.startTime.toDate(),
           end: app.endTime.toDate(),
-          isCompressed: actualDuration < nominalDuration // true se l'appuntamento è già in modalità "Flex"
+          isCompressed: actualDuration < nominalDuration
         };
       });
 
-      // 🚀 Adapter: Mappatura catalogo leggendo la flessibilità REALE dalle costanti
       const mappedCatalog = SERVICES.map(s => ({
         id: s.id,
         duration: s.duration,
         flexibility: s.flexibility || 0 
       }));
 
-      // 🚀 Adapter: Somma durata e flessibilità per combo di servizi multipli
       const totalDuration = selectedServices.reduce((acc, s) => acc + s.duration, 0);
       const totalFlexibility = selectedServices.reduce((acc, s) => acc + (s.flexibility || 0), 0);
 
@@ -554,7 +545,6 @@ export default function CustomerBooking({
 
       let allValidSlots: Date[] = [];
 
-      // Esecuzione del motore per ogni turno di lavoro della giornata
       activeOpeningHours.forEach(range => {
         const startHour = Math.floor(range.start);
         const startMin = Math.round((range.start - startHour) * 60);
@@ -574,12 +564,10 @@ export default function CustomerBooking({
         allValidSlots = [...allValidSlots, ...shiftSlots];
       });
 
-      // Ordinamento cronologico finale
       const uniqueSortedSlots = Array.from(new Set(allValidSlots.map(d => d.getTime())))
         .map(time => new Date(time))
         .sort((a, b) => a.getTime() - b.getTime());
 
-      // Filtra slot passati se la data selezionata è oggi
       const now = new Date();
       setAvailableSlots(uniqueSortedSlots.filter(slot => isAfter(slot, now)));
     } catch (error) {
@@ -599,7 +587,7 @@ export default function CustomerBooking({
   };
 
   const handleBooking = async (shouldUpdateProfilePhone: boolean = false) => {
-    if (!selectedSlot || selectedServices.length === 0 || !profile) return;
+    if (!selectedSlot || selectedServices.length === 0 || !profile || !tenantId) return;
 
     const fullPhone = phonePrefix + phoneNumber.replace(/\D/g, '');
     
@@ -640,9 +628,8 @@ export default function CustomerBooking({
     const dayEnd = endOfDay(selectedSlot);
 
    try {
-      // 1. Scarichiamo gli appuntamenti del giorno per trovare gli ostacoli
       const qDay = query(
-        collection(db, 'appointments'),
+        collection(db, 'salons', tenantId, 'appointments'),
         where('startTime', '>=', Timestamp.fromDate(dayStart)),
         where('startTime', '<=', Timestamp.fromDate(dayEnd)),
         where('status', '==', 'booked')
@@ -650,14 +637,12 @@ export default function CustomerBooking({
       const daySnap = await getDocs(qDay);
       const dayApps = daySnap.docs.map(d => d.data() as Appointment).sort((a, b) => a.startTime.toMillis() - b.startTime.toMillis());
 
-      // 2. Anti-doppia prenotazione
       if (dayApps.some(a => a.startTime.toMillis() === selectedSlot.getTime())) {
         alert("Prenotazione non riuscita: questo slot è già stato prenotato. La pagina verrà ricaricata.");
         window.location.reload();
         return;
       }
 
-      // 3. Troviamo la fine del turno
     const dateString = format(selectedSlot, 'yyyy-MM-dd');
     const dayOfWeek = getDay(selectedSlot);
     const exception = specialDays.find(ex => ex.date === dateString);
@@ -680,7 +665,6 @@ export default function CustomerBooking({
         }
       }
 
-      // 4. Calcoliamo il vero endTime basandoci sullo spazio disponibile
       const nextApp = dayApps.find(a => a.startTime.toMillis() > selectedSlot.getTime());
       const obstacleTime = nextApp && isBefore(nextApp.startTime.toDate(), shiftEnd) ? nextApp.startTime.toDate() : shiftEnd;
       
@@ -689,7 +673,7 @@ export default function CustomerBooking({
       const endTime = addMinutes(selectedSlot, actualDuration);
 
       const qCancelled = query(
-        collection(db, 'appointments'),
+        collection(db, 'salons', tenantId, 'appointments'),
         where('startTime', '==', Timestamp.fromDate(selectedSlot)),
         where('status', '==', 'cancelled'),
         where('customerId', '==', profile.uid)
@@ -698,14 +682,14 @@ export default function CustomerBooking({
       try {
         const cancelledSnapshot = await getDocs(qCancelled);
         for (const d of cancelledSnapshot.docs) {
-          await deleteDoc(doc(db, 'appointments', d.id));
+          await deleteDoc(doc(db, 'salons', tenantId, 'appointments', d.id));
         }
       } catch (err) {
         console.warn("Could not clean up cancelled appointments:", err);
       }
 
       const qProposals = query(
-        collection(db, 'rescheduleProposals'),
+        collection(db, 'salons', tenantId, 'rescheduleProposals'),
         where('status', '==', 'active'),
         where('gapStartTime', '==', Timestamp.fromDate(selectedSlot))
       );
@@ -713,11 +697,11 @@ export default function CustomerBooking({
       try {
         const proposalSnapshot = await getDocs(qProposals);
         for (const d of proposalSnapshot.docs) {
-          await updateDoc(doc(db, 'rescheduleProposals', d.id), { status: 'cancelled' });
-          const notifQ = query(collection(db, 'notifications'), where('proposalId', '==', d.id));
+          await updateDoc(doc(db, 'salons', tenantId, 'rescheduleProposals', d.id), { status: 'cancelled' });
+          const notifQ = query(collection(db, 'salons', tenantId, 'notifications'), where('proposalId', '==', d.id));
           const notifSnap = await getDocs(notifQ);
           for (const nd of notifSnap.docs) {
-            await deleteDoc(doc(db, 'notifications', nd.id));
+            await deleteDoc(doc(db, 'salons', tenantId, 'notifications', nd.id));
           }
         }
       } catch (err) {
@@ -744,12 +728,12 @@ export default function CustomerBooking({
         };
       }
 
-      const appointmentRef = await addDoc(collection(db, 'appointments'), appointmentData);
+      const appointmentRef = await addDoc(collection(db, 'salons', tenantId, 'appointments'), appointmentData);
       
       try {
         const barberSnapshot = await getDocs(query(collection(db, 'users'), where('role', '==', 'barber')));
         for (const barberDoc of barberSnapshot.docs) {
-          await addDoc(collection(db, 'notifications'), {
+          await addDoc(collection(db, 'salons', tenantId, 'notifications'), {
             userId: barberDoc.id,
             title: 'Nuova Prenotazione',
             message: `${profile?.displayName} ha prenotato per il ${format(selectedSlot, 'd MMM HH:mm')}`,
@@ -768,11 +752,13 @@ export default function CustomerBooking({
         customerName: isForFriend ? `${friendFirstName} ${friendLastName}` : (profile?.displayName || 'Cliente'),
         date: format(selectedSlot, 'dd/MM/yyyy'),
         time: format(selectedSlot, 'HH:mm'),
-        services: selectedServices.map(s => s.name).join(', ')
+        services: selectedServices.map(s => s.name).join(', '),
+        tenantId
       });
 
       if (shouldUpdateProfilePhone && newPhoneNumberToUpdate) {
         try {
+          // 🚀 USERS RESTA ALLA RADICE GLOBALE
           await updateDoc(doc(db, 'users', profile.uid), { phoneNumber: newPhoneNumberToUpdate });
         } catch (err) {
           console.warn("Could not update profile phone:", err);
@@ -823,7 +809,8 @@ export default function CustomerBooking({
     }
 
     try {
-      await updateDoc(doc(db, 'appointments', app.id!), {
+      if (!tenantId) return;
+      await updateDoc(doc(db, 'salons', tenantId, 'appointments', app.id!), {
         status: 'cancelled',
         cancelledAt: Timestamp.now(),
         cancelledBy: 'customer'
@@ -832,7 +819,7 @@ export default function CustomerBooking({
       const barberSnapshot = await getDocs(query(collection(db, 'users'), where('role', '==', 'barber')));
       
       for (const barberDoc of barberSnapshot.docs) {
-        await addDoc(collection(db, 'notifications'), {
+        await addDoc(collection(db, 'salons', tenantId, 'notifications'), {
           userId: barberDoc.id,
           title: 'Appuntamento Annullato',
           message: `${profile?.displayName} ha annullato l'appuntamento del ${format(appStart, 'd MMM HH:mm')}`,
@@ -848,7 +835,8 @@ export default function CustomerBooking({
         customerName: profile?.displayName || 'Cliente',
         date: format(appStart, 'dd/MM/yyyy'),
         time: format(appStart, 'HH:mm'),
-        services: app.services.map(s => s.name).join(', ')
+        services: app.services.map(s => s.name).join(', '),
+        tenantId
       });
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `appointments/${app.id}`);
@@ -856,9 +844,10 @@ export default function CustomerBooking({
   };
 
   const handleProposalAction = async (proposal: RescheduleProposal, action: 'accepted' | 'declined') => {
+    if (!tenantId) return;
     setLoading(true);
     try {
-      const proposalRef = doc(db, 'rescheduleProposals', proposal.id!);
+      const proposalRef = doc(db, 'salons', tenantId, 'rescheduleProposals', proposal.id!);
       const proposalDoc = await getDoc(proposalRef);
       
       if (!proposalDoc.exists() || proposalDoc.data().status !== 'active') {
@@ -876,7 +865,7 @@ export default function CustomerBooking({
       }
       
      if (action === 'accepted') {
-        const appDoc = await getDoc(doc(db, 'appointments', currentTarget.appointmentId));
+        const appDoc = await getDoc(doc(db, 'salons', tenantId, 'appointments', currentTarget.appointmentId));
         if (!appDoc.exists()) {
           console.error("Original appointment not found");
           currentTarget.status = 'expired';
@@ -886,7 +875,6 @@ export default function CustomerBooking({
 
         const myApp = appDoc.data() as Appointment;
 
-        // 🚀 BLOCCO STALE DATA: Intercetta l'appuntamento già annullato
         if (myApp.status !== 'booked') {
           alert("Questo appuntamento è stato annullato o completato dal barbiere. La proposta di cambio non è più valida.");
           await updateDoc(proposalRef, { status: 'cancelled' });
@@ -898,25 +886,21 @@ export default function CustomerBooking({
         
         const newStartTime = currentTarget.proposedStartTime ? currentTarget.proposedStartTime.toDate() : freshProposal.gapStartTime.toDate();
         
-        // 🚀 APPLICAZIONE DECOMPRESSIONE: Se la proposta contiene la fine (Shift intelligente), usala!
         let newEndTime: Date;
         if (currentTarget.proposedEndTime) {
           newEndTime = currentTarget.proposedEndTime.toDate();
         } else {
-          // Fallback legacy per retrocompatibilità
           const duration = (myApp.endTime.toDate().getTime() - myApp.startTime.toDate().getTime());
           newEndTime = new Date(newStartTime.getTime() + duration);
         }
 
-        // 🚀 PRE-CHECK ANTI-SOVRAPPOSIZIONE (Previene la doppia accettazione)
         const conflictQuery = query(
-          collection(db, 'appointments'),
+          collection(db, 'salons', tenantId, 'appointments'),
           where('status', '==', 'booked'),
           where('startTime', '<', Timestamp.fromDate(newEndTime)),
           where('endTime', '>', Timestamp.fromDate(newStartTime))
         );
         const conflictSnap = await getDocs(conflictQuery);
-        // Filtriamo se stesso per evitare falsi positivi
         const realConflicts = conflictSnap.docs.filter(d => d.id !== currentTarget.appointmentId);
         
         if (realConflicts.length > 0) {
@@ -925,10 +909,10 @@ export default function CustomerBooking({
           setProposals(prev => prev.filter(p => p.id !== proposal.id));
           setSelectedProposal(null);
           setLoading(false);
-          return; // Blocca tutto e non sovrascrive
+          return; 
         }
 
-        await updateDoc(doc(db, 'appointments', currentTarget.appointmentId), {
+        await updateDoc(doc(db, 'salons', tenantId, 'appointments', currentTarget.appointmentId), {
           startTime: Timestamp.fromDate(newStartTime),
           endTime: Timestamp.fromDate(newEndTime),
           status: 'booked',
@@ -937,7 +921,7 @@ export default function CustomerBooking({
 
         if (freshProposal.gapAppointmentId) {
           try {
-            await deleteDoc(doc(db, 'appointments', freshProposal.gapAppointmentId));
+            await deleteDoc(doc(db, 'salons', tenantId, 'appointments', freshProposal.gapAppointmentId));
           } catch (e) {
             console.warn("Gap appointment delete skipped:", e);
           }
@@ -945,7 +929,7 @@ export default function CustomerBooking({
         
         const barberSnapshot = await getDocs(query(collection(db, 'users'), where('role', '==', 'barber')));
         for (const barberDoc of barberSnapshot.docs) {
-          await addDoc(collection(db, 'notifications'), {
+          await addDoc(collection(db, 'salons', tenantId, 'notifications'), {
             userId: barberDoc.id,
             title: 'Proposta Accettata',
             message: `Il cliente ${profile?.displayName} ha accettato la tua proposta per il ${format(proposal.gapStartTime.toDate(), 'd MMM HH:mm')}`,
@@ -961,6 +945,7 @@ export default function CustomerBooking({
           customerName: profile?.displayName || 'Cliente',
           date: format(newStartTime, 'dd/MM/yyyy'),
           time: format(newStartTime, 'HH:mm'),
+          tenantId: tenantId,
           proposalDetails: {
             oldDate: format(myApp.startTime.toDate(), 'dd/MM/yyyy'),
             oldTime: format(myApp.startTime.toDate(), 'HH:mm')
@@ -974,13 +959,13 @@ export default function CustomerBooking({
 
         try {
           const notifQ = query(
-            collection(db, 'notifications'), 
+            collection(db, 'salons', tenantId, 'notifications'), 
             where('proposalId', '==', proposal.id),
             where('userId', '==', profile?.uid)
           );
           const notifSnapshot = await getDocs(notifQ);
           for (const d of notifSnapshot.docs) {
-            await deleteDoc(doc(db, 'notifications', d.id));
+            await deleteDoc(doc(db, 'salons', tenantId, 'notifications', d.id));
           }
         } catch (err) {
           console.warn("Pulizia notifiche utente completata con avviso:", err);
@@ -1000,7 +985,7 @@ export default function CustomerBooking({
             currentIdx: nextIdx
           });
 
-          await addDoc(collection(db, 'notifications'), {
+          await addDoc(collection(db, 'salons', tenantId, 'notifications'), {
             userId: updatedTargets[nextIdx].userId,
             title: 'Proposta di Cambio Orario',
             message: `Il barbiere ti propone un anticipo! Hai 15 minuti per accettare.`,
@@ -1017,7 +1002,7 @@ export default function CustomerBooking({
         }
 
         try {
-          const appDoc = await getDoc(doc(db, 'appointments', currentTarget.appointmentId));
+          const appDoc = await getDoc(doc(db, 'salons', tenantId, 'appointments', currentTarget.appointmentId));
           const myApp = appDoc.exists() ? (appDoc.data() as Appointment) : null;
           
           const customerPhone = myApp?.isForFriend 
@@ -1026,7 +1011,7 @@ export default function CustomerBooking({
 
           const barberSnapshot = await getDocs(query(collection(db, 'users'), where('role', '==', 'barber')));
           for (const barberDoc of barberSnapshot.docs) {
-            await addDoc(collection(db, 'notifications'), {
+            await addDoc(collection(db, 'salons', tenantId, 'notifications'), {
               userId: barberDoc.id,
               title: 'Proposta Rifiutata',
               message: `Il cliente ${profile?.displayName || 'Cliente'} ha preferito mantenere il suo orario.`,
@@ -1047,6 +1032,7 @@ export default function CustomerBooking({
             customerName: profile?.displayName || 'Cliente',
             date: format(myApp?.startTime?.toDate() || freshProposal.gapStartTime.toDate(), 'dd/MM/yyyy'),
             time: format(myApp?.startTime?.toDate() || freshProposal.gapStartTime.toDate(), 'HH:mm'),
+            tenantId: tenantId,
             proposalDetails: {
               oldTime: format(myApp?.startTime?.toDate() || freshProposal.gapStartTime.toDate(), 'HH:mm'),
               proposedTime: format(freshProposal.gapStartTime.toDate(), 'HH:mm')
@@ -1060,14 +1046,14 @@ export default function CustomerBooking({
 
       if (profile?.uid) {
         const userNotifQ = query(
-          collection(db, 'notifications'),
+          collection(db, 'salons', tenantId, 'notifications'),
           where('proposalId', '==', proposal.id),
           where('userId', '==', profile.uid)
         );
         
         const userNotifSnapshot = await getDocs(userNotifQ);
         for (const d of userNotifSnapshot.docs) {
-          await deleteDoc(doc(db, 'notifications', d.id));
+          await deleteDoc(doc(db, 'salons', tenantId, 'notifications', d.id));
         }
       }
 
@@ -1085,27 +1071,22 @@ export default function CustomerBooking({
     }
   };
 
-  // 🚀 MEMOIZZAZIONE REGOLE CALENDARIO (Singola Funzione Blindata)
   const disabledDays = useMemo(() => {
     return (date: Date) => {
-      // 1. Limiti temporali assoluti (Blocca il passato o date oltre i 150 giorni)
       if (isBefore(startOfDay(date), todayNormalized)) return true;
       if (isAfter(startOfDay(date), maxBookingDate)) return true;
 
       const dateString = format(date, 'yyyy-MM-dd');
       
-      // 2. Eccezioni del Calendario (Ferie o Aperture Straordinarie)
       const exception = specialDays.find(ex => ex.date === dateString);
       if (exception) {
-        if (exception.isClosed) return true; // Ferie forzate
-        if (fullyBookedDays.includes(dateString)) return true; // Aperto eccezionalmente, ma esaurito
-        return false; // Domenica aperta e con posti: Rendila cliccabile!
+        if (exception.isClosed) return true; 
+        if (fullyBookedDays.includes(dateString)) return true; 
+        return false; 
       }
       
-      // 3. Regole Standard di chiusura granulare
       if (!businessSettings.weeklySchedule[getDay(date)]?.isOpen) return true;
       
-      // 4. Scudo anti-overbooking per i giorni standard
       if (fullyBookedDays.includes(dateString)) return true;
       
       return false;
@@ -1780,7 +1761,6 @@ export default function CustomerBooking({
                   if (date) {
                     const normalizedDate = startOfDay(date);
                     setSelectedDate(normalizedDate);
-                    setWindowStart(normalizedDate);
                     setSelectedSlot(null);
                     setShowCalendar(false);
                   }

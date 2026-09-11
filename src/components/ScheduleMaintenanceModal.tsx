@@ -5,35 +5,36 @@ import { format, startOfDay, endOfDay } from 'date-fns';
 import { it } from 'date-fns/locale';
 import { DayPicker } from 'react-day-picker';
 import ScheduleSettingsModal from './ScheduleSettingsModal';
-import { XCircle, Settings, Calendar as CalendarIcon, Save, Trash2, Clock } from 'lucide-react';
+import { XCircle, Settings, Calendar as CalendarIcon, Save, Trash2 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { SpecialDay } from '../types';
+import { useAuth } from '../context/AuthContext'; // 🚀 Aggiunto import del contesto
 
 interface Props {
   onClose: () => void;
 }
 
 export default function ScheduleMaintenanceModal({ onClose }: Props) {
+  // 🚀 Estrazione tenantId
+  const { tenantId } = useAuth();
+
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const [isClosed, setIsClosed] = useState(false);
   const [loading, setLoading] = useState(false);
   
-  // Stato per la modale sottomessa degli orari di apertura standard
   const [isScheduleSettingsOpen, setIsScheduleSettingsOpen] = useState(false);
   
-  // Orari di default (es. mattina e pomeriggio)
   const [shift1Start, setShift1Start] = useState<number>(8);
   const [shift1End, setShift1End] = useState<number>(13);
   const [hasShift2, setHasShift2] = useState(true);
   const [shift2Start, setShift2Start] = useState<number>(14);
   const [shift2End, setShift2End] = useState<number>(20);
 
-  // Genera le opzioni per la tendina (scatti di 15 minuti)
   const timeOptions = React.useMemo(() => {
     const options = [];
     for (let h = 0; h < 24; h++) {
       for (let m = 0; m < 60; m += 15) {
-        const value = h + (m / 60); // Es. 8:30 diventa 8.5
+        const value = h + (m / 60); 
         const label = `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
         options.push({ value, label });
       }
@@ -41,11 +42,12 @@ export default function ScheduleMaintenanceModal({ onClose }: Props) {
     return options;
   }, []);
 
-  // Carica i dati esistenti se il giorno ha già un'eccezione
   useEffect(() => {
     const fetchException = async () => {
+      if (!tenantId) return; // 🚀 Controllo sicurezza
       const dateString = format(selectedDate, 'yyyy-MM-dd');
-      const docRef = doc(db, 'calendar_exceptions', dateString);
+      // 🚀 Lettura confinata al tenant
+      const docRef = doc(db, 'salons', tenantId, 'calendar_exceptions', dateString);
       const docSnap = await getDoc(docRef);
       
       if (docSnap.exists()) {
@@ -63,7 +65,6 @@ export default function ScheduleMaintenanceModal({ onClose }: Props) {
           }
         }
       } else {
-        // Reset ai default se non c'è eccezione
         setIsClosed(false);
         setShift1Start(8); setShift1End(13);
         setHasShift2(true);
@@ -71,9 +72,10 @@ export default function ScheduleMaintenanceModal({ onClose }: Props) {
       }
     };
     fetchException();
-  }, [selectedDate]);
+  }, [selectedDate, tenantId]);
 
   const handleSave = async () => {
+    if (!tenantId) return;
     setLoading(true);
     const dateString = format(selectedDate, 'yyyy-MM-dd');
     
@@ -85,12 +87,12 @@ export default function ScheduleMaintenanceModal({ onClose }: Props) {
       }
     }
 
-    // 🚀 SCUDO ANTI-CONFLITTO
     try {
       const dayStart = startOfDay(selectedDate);
       const dayEnd = endOfDay(selectedDate);
+      // 🚀 Scudo anti-conflitto confinato al tenant
       const qApps = query(
-        collection(db, 'appointments'),
+        collection(db, 'salons', tenantId, 'appointments'),
         where('startTime', '>=', Timestamp.fromDate(dayStart)),
         where('startTime', '<=', Timestamp.fromDate(dayEnd)),
         where('status', '==', 'booked')
@@ -128,7 +130,6 @@ export default function ScheduleMaintenanceModal({ onClose }: Props) {
     } catch (e) {
       console.error("Errore controllo conflitti:", e);
     }
-    // Fine Scudo
 
     const specialDayData: SpecialDay = {
       date: dateString,
@@ -137,8 +138,8 @@ export default function ScheduleMaintenanceModal({ onClose }: Props) {
     };
 
     try {
-      // setDoc con dateString come ID per sovrascrivere o creare senza duplicati
-      await setDoc(doc(db, 'calendar_exceptions', dateString), specialDayData);
+      // 🚀 Salvataggio eccezione confinata al tenant
+      await setDoc(doc(db, 'salons', tenantId, 'calendar_exceptions', dateString), specialDayData);
       alert('Orario aggiornato con successo!');
       onClose();
     } catch (error) {
@@ -150,11 +151,13 @@ export default function ScheduleMaintenanceModal({ onClose }: Props) {
   };
 
   const handleDelete = async () => {
+    if (!tenantId) return;
     if (!window.confirm("Vuoi ripristinare l'orario standard per questo giorno?")) return;
     setLoading(true);
     const dateString = format(selectedDate, 'yyyy-MM-dd');
     try {
-      await deleteDoc(doc(db, 'calendar_exceptions', dateString));
+      // 🚀 Eliminazione eccezione confinata al tenant
+      await deleteDoc(doc(db, 'salons', tenantId, 'calendar_exceptions', dateString));
       alert('Orario standard ripristinato!');
       onClose();
     } catch (error) {
@@ -179,7 +182,6 @@ export default function ScheduleMaintenanceModal({ onClose }: Props) {
           </div>
 
           <div className="flex items-center gap-2">
-            {/* Pulsante per accedere alla modale degli Orari Standard */}
             <button
               onClick={() => setIsScheduleSettingsOpen(true)}
               className="flex items-center gap-1.5 px-3 py-2 bg-black text-white text-xs font-bold rounded-xl hover:bg-gray-800 transition-all shadow-sm"
@@ -196,7 +198,6 @@ export default function ScheduleMaintenanceModal({ onClose }: Props) {
         </div>
 
         <div className="p-6 space-y-8">
-          {/* Calendario per scegliere la data */}
           <div className="flex justify-center bg-gray-50 rounded-2xl p-4">
             <DayPicker
               mode="single"
@@ -216,7 +217,6 @@ export default function ScheduleMaintenanceModal({ onClose }: Props) {
               Impostazioni per il {format(selectedDate, 'dd/MM/yyyy')}
             </h3>
 
-            {/* Toggle Chiusura */}
             <div className="flex items-center justify-between p-4 bg-gray-50 rounded-xl border border-gray-200">
               <span className="font-bold text-gray-700">Chiuso tutto il giorno</span>
               <input
@@ -227,7 +227,6 @@ export default function ScheduleMaintenanceModal({ onClose }: Props) {
               />
             </div>
 
-            {/* Configurazione Orari (Visibile solo se aperto) */}
             {!isClosed && (
               <div className="space-y-4 animate-in fade-in">
                 <div className="p-4 border border-gray-200 rounded-xl space-y-3">
@@ -284,7 +283,6 @@ export default function ScheduleMaintenanceModal({ onClose }: Props) {
           </button>
         </div>
 
-        {/* Modale sovrapposta per la configurazione degli orari e dei giorni di chiusura standard */}
         {isScheduleSettingsOpen && (
           <ScheduleSettingsModal onClose={() => setIsScheduleSettingsOpen(false)} />
         )}

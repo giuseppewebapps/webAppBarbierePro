@@ -1,3 +1,5 @@
+import { Timestamp } from 'firebase/firestore';
+
 export type UserRole = 'barber' | 'customer';
 
 export interface UserProfile {
@@ -6,6 +8,7 @@ export interface UserProfile {
   displayName: string;
   phoneNumber?: string;
   role: UserRole;
+  createdAt?: Timestamp;
 }
 
 export interface Service {
@@ -13,7 +16,7 @@ export interface Service {
   name: string;
   description?: string;
   price: number;
-  duration: number; // in minutes
+  duration: number; // in minuti
   flexibility?: number;
 }
 
@@ -48,7 +51,8 @@ export interface Notification {
   userId: string;
   title: string;
   message: string;
-  type: 'cancellation' | 'booking' | 'reschedule_proposal' | 'manual_management_required';
+  // 🚀 Aggiunto 'proposal_declined' necessario per le notifiche al barbiere
+  type: 'cancellation' | 'booking' | 'reschedule_proposal' | 'manual_management_required' | 'proposal_declined';
   read: boolean;
   createdAt: any;
   proposalId?: string;
@@ -63,7 +67,7 @@ export interface RescheduleProposal {
   targets: {
     userId: string;
     appointmentId: string;
-    status: 'pending' | 'accepted' | 'declined' | 'expired' | 'waiting';
+    status: 'pending' | 'accepted' | 'declined' | 'expired' | 'waiting'; // Mantenuto 'waiting'
     notifiedAt?: any;
     expiresAt?: any;
     proposedStartTime: any;
@@ -85,13 +89,13 @@ export interface TimeRange {
   end: number;   // es. 13.75 per le 13:45
 }
 
-// 🚀 NUOVE INTERFACCE PER L'ORARIO GRANULARE GIORNALIERO
+// 🚀 STRUTTURA ORARIO GRANULARE GIORNALIERO
 export interface DaySchedule {
   isOpen: boolean;
   shifts: TimeRange[];
 }
 
-export type WeeklySchedule = Record<number, DaySchedule>; // Chiave: 0 (Domenica) -> 6 (Sabato)
+export type WeeklySchedule = Record<number, DaySchedule>; // 0 (Domenica) -> 6 (Sabato)
 
 export interface BusinessSettings {
   weeklySchedule: WeeklySchedule;
@@ -100,7 +104,19 @@ export interface BusinessSettings {
 
 export interface SpecialDay {
   id?: string;
-  date: string; // Formato 'YYYY-MM-DD' (es. '2024-08-14') per facilitare la ricerca
-  isClosed: boolean; // true = chiuso tutto il giorno, false = orario personalizzato
-  openingHours?: { start: number; end: number }[]; // Es. [{start: 8, end: 14}]
+  date: string; // Formato 'YYYY-MM-DD'
+  isClosed: boolean; 
+  openingHours?: { start: number; end: number }[]; 
+}
+
+// 🚀 NUOVA INTERFACCIA SAAS: Per tipizzare le informazioni dinamiche del salone
+export interface SalonPublicSettings {
+  name: string;
+  phone: string;
+  whatsapp: string;
+  instagram: string;
+  instagramUrl: string;
+  address: string;
+  mapsUrl: string;
+  email: string;
 }

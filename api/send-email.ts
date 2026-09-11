@@ -1,30 +1,30 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { Resend } from 'resend';
 
-// Su Vercel dovrai impostare RESEND_API_KEY
+// Su Vercel dovrai impostare RESEND_API_KEY e SYSTEM_EMAIL
 const resend = new Resend(process.env.RESEND_API_KEY);
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // Consenti solo richieste POST
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Metodo non consentito' });
   }
 
-  const { type, customerName, date, time, services, proposalDetails, targetEmail } = req.body;
+  const { type, customerName, date, time, services, proposalDetails, targetEmail, tenantId } = req.body;
 
-  if (!targetEmail) {
-    return res.status(400).json({ error: 'Indirizzo email di destinazione mancante' });
-  }
+  // 🚀 Fallback SaaS: Se il frontend non passa l'email specifica del barbiere, usiamo quella di sistema globale configurata su Vercel
+  const recipient = targetEmail || process.env.SYSTEM_EMAIL || 'notifiche.medohs@gmail.com';
+  
+  // 🚀 Formattiamo il nome del salone per l'oggetto della mail
+  const salonName = tenantId ? tenantId.toUpperCase() : 'SALONE';
 
   let subject = '';
   let badgeColor = '#000000';
   let badgeText = '';
   let contentHtml = '';
 
-  // 1. NUOVA PRENOTAZIONE
   if (type === 'new_booking') {
-    subject = `💈 NUOVA PRENOTAZIONE: ${customerName}`;
-    badgeColor = '#10B981'; // Verde
+    subject = `💈 [${salonName}] NUOVA PRENOTAZIONE: ${customerName}`;
+    badgeColor = '#10B981';
     badgeText = 'NUOVA PRENOTAZIONE';
     contentHtml = `
       <p style="margin: 5px 0;"><strong>Cliente:</strong> ${customerName}</p>
@@ -33,10 +33,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       <p style="margin: 5px 0;"><strong>Servizi:</strong> ${services}</p>
     `;
   } 
-  // 2. ANNULLAMENTO
   else if (type === 'cancellation') {
-    subject = `❌ CANCELLAZIONE: ${customerName}`;
-    badgeColor = '#EF4444'; // Rosso
+    subject = `❌ [${salonName}] CANCELLAZIONE: ${customerName}`;
+    badgeColor = '#EF4444';
     badgeText = 'APPUNTAMENTO ANNULLATO';
     contentHtml = `
       <p style="margin: 5px 0;"><strong>Cliente:</strong> ${customerName}</p>
@@ -46,10 +45,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       <p style="margin-top: 15px; font-style: italic; color: #6b7280;">Si è liberato un buco in agenda!</p>
     `;
   } 
-  // 3A. PROPOSTA ACCETTATA
   else if (type === 'proposal_accepted') {
-    subject = `✅ CAMBIO ORARIO ACCETTATO: ${customerName}`;
-    badgeColor = '#25D366'; // Verde WhatsApp
+    subject = `✅ [${salonName}] CAMBIO ACCETTATO: ${customerName}`;
+    badgeColor = '#25D366';
     badgeText = 'PROPOSTA ACCETTATA';
     contentHtml = `
       <p style="margin: 5px 0;"><strong>Cliente:</strong> ${customerName}</p>
@@ -59,10 +57,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       </div>
     `;
   } 
-  // 3B. PROPOSTA RIFIUTATA / SCADUTA
   else if (type === 'proposal_declined') {
-    subject = `⚠️ PROPOSTA IGNORATA/RIFIUTATA: ${customerName}`;
-    badgeColor = '#F59E0B'; // Arancione
+    subject = `⚠️ [${salonName}] PROPOSTA RIFIUTATA: ${customerName}`;
+    badgeColor = '#F59E0B';
     badgeText = 'PROPOSTA RIFIUTATA';
     contentHtml = `
       <p style="margin: 5px 0;"><strong>Cliente:</strong> ${customerName}</p>
@@ -77,7 +74,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f4f4f5; margin: 0; padding: 20px;">
       <div style="max-width: 500px; margin: 0 auto; background: #ffffff; border-radius: 20px; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.08);">
         <div style="background-color: #000000; color: #ffffff; padding: 25px 20px; text-align: center;">
-          <h1 style="margin: 0; font-size: 20px; letter-spacing: 2px; text-transform: uppercase;">Notifiche App</h1>
+          <h1 style="margin: 0; font-size: 20px; letter-spacing: 2px; text-transform: uppercase;">Notifiche ${salonName}</h1>
         </div>
         <div style="padding: 25px;">
           <span style="display: inline-block; background-color: ${badgeColor}; color: #ffffff; font-size: 10px; font-weight: bold; padding: 4px 10px; border-radius: 12px; margin-bottom: 15px; text-transform: uppercase;">
@@ -94,8 +91,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     const data = await resend.emails.send({
-      from: 'Notifiche Salone <onboarding@resend.dev>', // Indirizzo free di Resend
-      to: [targetEmail],
+      from: 'Notifiche Salone <onboarding@resend.dev>',
+      to: [recipient],
       subject,
       html: emailHtml,
     });

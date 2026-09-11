@@ -61,7 +61,7 @@ import {
   MessageCircle,
   Settings
 } from 'lucide-react';
-import { useAuth } from '../App';
+import { useAuth } from '../context/AuthContext';
 import { WhatsAppButton } from './WhatsAppButton';
 import { generateWhatsAppLink } from '../utils/whatsapp';
 import { 
@@ -115,7 +115,9 @@ interface BarberDashboardProps {
 }
 
 export default function BarberDashboard({ selectedAppointmentId, selectedNotificationType, onAppointmentDialogClose }: BarberDashboardProps) {
-  const { profile } = useAuth();
+  // 🚀 ESTRAZIONE TENANT ID DAL CONTESTO
+  const { profile, tenantId } = useAuth();
+  
   const [appointments, setAppointments] = useState<(Appointment & { customer?: UserProfile })[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedDate, setSelectedDate] = useState(new Date());
@@ -139,21 +141,20 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
   const [isReminderModalOpen, setIsReminderModalOpen] = useState(false);
   const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
 
-  // 🚀 NUOVI STATI PER LA MODIFICA RAPIDA CLIENTE
   const [isEditingCustomer, setIsEditingCustomer] = useState(false);
   const [editCustomerForm, setEditCustomerForm] = useState({ firstName: '', lastName: '', phone: '', email: '' });
   const [savingCustomer, setSavingCustomer] = useState(false);
 
-  // STATO IMPOSTAZIONI ORARI DINAMICHE
   const [businessSettings, setBusinessSettings] = useState<{
     weeklySchedule: WeeklySchedule;
   }>({
     weeklySchedule: DEFAULT_WEEKLY_SCHEDULE
   });
 
-  // ASCOLTA LE IMPOSTAZIONI STANDARD DA FIRESTORE
+  // 🚀 QUERY MULTI-TENANT
   useEffect(() => {
-    const unsubscribe = onSnapshot(doc(db, 'settings', 'business_hours'), (docSnap) => {
+    if (!tenantId) return;
+    const unsubscribe = onSnapshot(doc(db, 'salons', tenantId, 'settings', 'business_hours'), (docSnap) => {
       if (docSnap.exists()) {
         const data = docSnap.data();
         setBusinessSettings({
@@ -162,17 +163,18 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
       }
     });
     return () => unsubscribe();
-  }, []);
+  }, [tenantId]);
 
-  // Ascolta le eccezioni del calendario
+  // 🚀 QUERY MULTI-TENANT
   useEffect(() => {
-    const q = query(collection(db, 'calendar_exceptions'));
+    if (!tenantId) return;
+    const q = query(collection(db, 'salons', tenantId, 'calendar_exceptions'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as SpecialDay[];
       setSpecialDays(docs);
     });
     return () => unsubscribe();
-  }, []);
+  }, [tenantId]);
 
   useEffect(() => {
     const handleOpenManualBooking = () => setIsManualBookingOpen(true);
@@ -196,24 +198,24 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
     return () => clearInterval(timer);
   }, []);
 
-  // Avanzamento Coda Proposte Reschedule Scadute
   useEffect(() => {
-    if (!profile || profile.role !== 'barber') return;
+    if (!profile || profile.role !== 'barber' || !tenantId) return;
 
     const checkAndAdvance = async () => {
       try {
-        const q = query(collection(db, 'rescheduleProposals'), where('status', 'in', ['active', 'completed']));
+        // 🚀 QUERY MULTI-TENANT
+        const q = query(collection(db, 'salons', tenantId, 'rescheduleProposals'), where('status', 'in', ['active', 'completed']));
         const snapshot = await getDocs(q);
         
         for (const docSnap of snapshot.docs) {
           const proposal = { id: docSnap.id, ...docSnap.data() } as RescheduleProposal;
           
           if (isAfter(currentTime, proposal.gapStartTime.toDate())) {
-            await deleteDoc(doc(db, 'rescheduleProposals', proposal.id!));
-            const notifQ = query(collection(db, 'notifications'), where('proposalId', '==', proposal.id));
+            await deleteDoc(doc(db, 'salons', tenantId, 'rescheduleProposals', proposal.id!));
+            const notifQ = query(collection(db, 'salons', tenantId, 'notifications'), where('proposalId', '==', proposal.id));
             const notifSnap = await getDocs(notifQ);
             for (const nd of notifSnap.docs) {
-              await deleteDoc(doc(db, 'notifications', nd.id));
+              await deleteDoc(doc(db, 'salons', tenantId, 'notifications', nd.id));
             }
             continue;
           }
@@ -236,7 +238,7 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
                 updatedTargets[nextIdx].notifiedAt = Timestamp.now();
                 updatedTargets[nextIdx].expiresAt = Timestamp.fromDate(addMinutes(new Date(), 15));
                 
-                await addDoc(collection(db, 'notifications'), {
+                await addDoc(collection(db, 'salons', tenantId, 'notifications'), {
                   userId: updatedTargets[nextIdx].userId,
                   title: 'Proposta di Cambio Orario',
                   message: `Il barbiere ti propone un anticipo! Hai 15 minuti per accettare.`,
@@ -249,19 +251,19 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
                 newStatus = 'completed';
               }
 
-              await updateDoc(doc(db, 'rescheduleProposals', proposal.id!), {
+              await updateDoc(doc(db, 'salons', tenantId, 'rescheduleProposals', proposal.id!), {
                 targets: updatedTargets,
                 currentIdx: nextIdx < updatedTargets.length ? nextIdx : proposal.currentIdx,
                 status: newStatus
               });
               
-              const notifQ = query(collection(db, 'notifications'), 
+              const notifQ = query(collection(db, 'salons', tenantId, 'notifications'), 
                 where('proposalId', '==', proposal.id), 
                 where('userId', '==', currentTarget.userId)
               );
               const notifSnap = await getDocs(notifQ);
               for (const d of notifSnap.docs) {
-                await deleteDoc(doc(db, 'notifications', d.id));
+                await deleteDoc(doc(db, 'salons', tenantId, 'notifications', d.id));
               }
             }
           }
@@ -272,10 +274,12 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
     };
 
     checkAndAdvance();
-  }, [currentTime, profile]);
+  }, [currentTime, profile, tenantId]);
 
   useEffect(() => {
-    const path = 'appointments';
+    if (!tenantId) return;
+    // 🚀 QUERY MULTI-TENANT
+    const path = `salons/${tenantId}/appointments`;
     const q = query(
       collection(db, path),
       orderBy('startTime', 'asc')
@@ -289,6 +293,7 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
 
       const appointmentsWithProfiles = await Promise.all(docs.map(async (app) => {
         try {
+          // 🚀 USERS RESTA ALLA RADICE GLOBALE
           const userDoc = app.customerId !== 'manual_entry' ? await getDoc(doc(db, 'users', app.customerId)) : null;
           return {
             ...app,
@@ -306,7 +311,7 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
     });
 
     return () => unsubscribe();
-  }, []);
+  }, [tenantId]);
 
   useEffect(() => {
     if (selectedAppointmentId && appointments.length > 0) {
@@ -363,12 +368,11 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
   };
 
 const handleSaveCustomerEdits = async () => {
-    if (!selectedAppointment) return;
+    if (!selectedAppointment || !tenantId) return;
     setSavingCustomer(true);
     try {
       const fullName = `${editCustomerForm.firstName} ${editCustomerForm.lastName}`.trim();
       
-      // 1. IGIENIZZAZIONE DATI (Strict Validation)
       const rawPhone = editCustomerForm.phone.replace(/\D/g, '');
       const pure10Digits = (rawPhone.startsWith('39') && rawPhone.length > 10) 
         ? rawPhone.substring(2) 
@@ -376,9 +380,9 @@ const handleSaveCustomerEdits = async () => {
       const fullPhone = pure10Digits.length >= 9 ? `+39${pure10Digits}` : '';
       const cleanContactPhone = pure10Digits;
 
-      const appRef = doc(db, 'appointments', selectedAppointment.id!);
+      // 🚀 QUERY MULTI-TENANT
+      const appRef = doc(db, 'salons', tenantId, 'appointments', selectedAppointment.id!);
       
-      // 2. SALVATAGGIO IN CLOUD
       if (selectedAppointment.isForFriend) {
         await updateDoc(appRef, {
           'friendDetails.firstName': editCustomerForm.firstName,
@@ -393,28 +397,28 @@ const handleSaveCustomerEdits = async () => {
           'customer.email': editCustomerForm.email
         });
 
-        // Fail-Safe Update su Users
         const isAppUser = selectedAppointment.customerId && selectedAppointment.customerId !== 'manual_entry' && selectedAppointment.customerId !== 'test_entry';
         
         if (isAppUser) {
           try {
+            // 🚀 USERS RESTA ALLA RADICE GLOBALE
             await updateDoc(doc(db, 'users', selectedAppointment.customerId), {
               displayName: fullName,
               phoneNumber: fullPhone,
               ...(editCustomerForm.email ? { email: editCustomerForm.email } : {}),
               updatedAt: Timestamp.now()
             });
-            // REGOLA D'ORO: Distruggiamo l'eventuale contatto ombra se esisteva!
             if (cleanContactPhone) {
-              try { await deleteDoc(doc(db, 'contacts', cleanContactPhone)); } catch(e) {}
+              // 🚀 QUERY MULTI-TENANT
+              try { await deleteDoc(doc(db, 'salons', tenantId, 'contacts', cleanContactPhone)); } catch(e) {}
             }
           } catch (e) {
             console.warn("Salto aggiornamento cloud utente (documento protetto o legacy).");
           }
         } else {
-          // L'utente non ha l'app: Aggiorna la rubrica manuale
           if (cleanContactPhone) {
-            await setDoc(doc(db, 'contacts', cleanContactPhone), {
+            // 🚀 QUERY MULTI-TENANT
+            await setDoc(doc(db, 'salons', tenantId, 'contacts', cleanContactPhone), {
               firstName: editCustomerForm.firstName,
               lastName: editCustomerForm.lastName,
               firstNameLower: editCustomerForm.firstName.toLowerCase(),
@@ -428,7 +432,6 @@ const handleSaveCustomerEdits = async () => {
         }
       }
 
-      // 3. AGGIORNAMENTO ISTANTANEO UI (Senza F5)
       const updatedCustomerObj = selectedAppointment.isForFriend ? undefined : {
         ...selectedAppointment.customer!,
         displayName: fullName,
@@ -465,16 +468,17 @@ const handleSaveCustomerEdits = async () => {
   };
 
   const handleCancel = async (app: Appointment) => {
-    const path = `appointments/${app.id}`;
+    if (!tenantId) return;
+    const path = `salons/${tenantId}/appointments/${app.id}`;
     try {
-      await updateDoc(doc(db, 'appointments', app.id!), {
+      await updateDoc(doc(db, 'salons', tenantId, 'appointments', app.id!), {
         status: 'cancelled',
         cancelledAt: Timestamp.now(),
         cancelledBy: 'barber'
       });
 
       if (app.customerId !== profile?.uid) {
-        await addDoc(collection(db, 'notifications'), {
+        await addDoc(collection(db, 'salons', tenantId, 'notifications'), {
           userId: app.customerId,
           title: 'Appuntamento Annullato dal Barbiere',
           message: `Il barbiere ha annullato il tuo appuntamento del ${format(app.startTime.toDate(), 'd MMM HH:mm')}`,
@@ -525,7 +529,6 @@ const handleSaveCustomerEdits = async () => {
           activeOpeningHours = businessSettings.weeklySchedule[dayOfWeek].shifts;
         }
 
-        // Se il giorno è chiuso, mostriamo l'intervallo di default (08:00 - 20:00)
         if (exceptionForToday?.isClosed || (!exceptionForToday && !businessSettings.weeklySchedule[dayOfWeek]?.isOpen) || activeOpeningHours.length === 0) {
           return {
             type: 'daily' as const,
@@ -537,7 +540,6 @@ const handleSaveCustomerEdits = async () => {
           };
         }
 
-        // Troviamo l'ora intera di inizio (floor) e di fine (ceil/round) per mantenere le etichette pulite (es. 07:00, 08:00)
         const minStart = Math.min(...activeOpeningHours.map(h => h.start));
         const maxEnd = Math.max(...activeOpeningHours.map(h => h.end));
 
@@ -615,7 +617,7 @@ const handleSaveCustomerEdits = async () => {
   };
 
   const handleProposeReschedule = async () => {
-    if (!showGapFiller || selectedCandidates.length === 0) return;
+    if (!showGapFiller || selectedCandidates.length === 0 || !tenantId) return;
     setSendingProposal(true);
     try {
       const targets = selectedCandidates.map((id, idx) => {
@@ -641,12 +643,12 @@ const handleSaveCustomerEdits = async () => {
         createdAt: Timestamp.now()
       };
 
-      const proposalRef = await addDoc(collection(db, 'rescheduleProposals'), proposalData);
+      const proposalRef = await addDoc(collection(db, 'salons', tenantId, 'rescheduleProposals'), proposalData);
 
       const firstTarget = targets[0];
       const timeToDisplay = gapPlacements[selectedCandidates[0]] || showGapFiller.start;
       
-      await addDoc(collection(db, 'notifications'), {
+      await addDoc(collection(db, 'salons', tenantId, 'notifications'), {
         userId: firstTarget.userId,
         title: 'Proposta di Cambio Orario',
         message: `Il barbiere ti propone di anticipare il tuo appuntamento del ${format(rescheduleCandidates.find(c => c.id === selectedCandidates[0])!.startTime.toDate(), 'd MMM')} alle ore ${format(timeToDisplay, 'HH:mm')}. Hai 15 minuti per accettare!`,
@@ -665,15 +667,13 @@ const handleSaveCustomerEdits = async () => {
     }
   };
 
-  // 🚀 MOTORE DI TRASLAZIONE E DECOMPRESSIONE DINAMICA
   const handleShiftProposal = async () => {
-    if (!showGapFiller || !shiftConfirm) return;
+    if (!showGapFiller || !shiftConfirm || !tenantId) return;
     const { app: candidateApp, direction } = shiftConfirm;
     
     setSendingProposal(true);
     try {
-      // 🚀 CONTROLLO ANTI-SPAM (Niente proposte duplicate)
-      const existingQ = query(collection(db, 'rescheduleProposals'), where('status', '==', 'active'));
+      const existingQ = query(collection(db, 'salons', tenantId, 'rescheduleProposals'), where('status', '==', 'active'));
       const existingSnap = await getDocs(existingQ);
       const hasDuplicate = existingSnap.docs.some(doc => {
         const data = doc.data() as RescheduleProposal;
@@ -715,9 +715,9 @@ const handleSaveCustomerEdits = async () => {
         createdAt: Timestamp.now()
       };
 
-      const proposalRef = await addDoc(collection(db, 'rescheduleProposals'), proposalData);
+      const proposalRef = await addDoc(collection(db, 'salons', tenantId, 'rescheduleProposals'), proposalData);
 
-      await addDoc(collection(db, 'notifications'), {
+      await addDoc(collection(db, 'salons', tenantId, 'notifications'), {
         userId: candidateApp.customerId,
         title: 'Proposta di Cambio Orario',
         message: `Il barbiere ti chiede se puoi ${direction === 'anticipo' ? 'anticipare' : 'posticipare'} il tuo appuntamento alle ore ${format(newStart, 'HH:mm')}. Hai 15 minuti per accettare!`,
@@ -745,7 +745,6 @@ const handleSaveCustomerEdits = async () => {
       .filter(a => isSameDay(a.startTime.toDate(), clickedGap.start) && a.status === 'booked')
       .sort((a, b) => a.startTime.toMillis() - b.startTime.toMillis());
     
-    // 1. Identifica i turni validi del giorno per non esondare nella chiusura
     const dateString = format(clickedGap.start, 'yyyy-MM-dd');
     const dayOfWeek = getDay(clickedGap.start);
     const exception = specialDays.find(ex => ex.date === dateString);
@@ -757,7 +756,7 @@ const handleSaveCustomerEdits = async () => {
       activeHours = businessSettings.weeklySchedule[dayOfWeek]?.shifts || [];
     }
 
-    let currentShiftEnd = setHours(startOfDay(clickedGap.start), 20); // Fallback
+    let currentShiftEnd = setHours(startOfDay(clickedGap.start), 20); 
     for (const range of activeHours) {
       const eH = Math.floor(range.end);
       const eM = Math.round((range.end - eH) * 60);
@@ -769,7 +768,6 @@ const handleSaveCustomerEdits = async () => {
       }
     }
 
-    // 2. Il limite del buco è il prossimo appuntamento OPPURE la chiusura del turno
     let trueEnd = currentShiftEnd;
     const nextApp = dayApps.find(a => isAfter(a.startTime.toDate(), clickedGap.start) || a.startTime.toDate().getTime() === clickedGap.start.getTime());
     
@@ -780,7 +778,6 @@ const handleSaveCustomerEdits = async () => {
     const expandedGap = { ...clickedGap, end: trueEnd };
     const gapDuration = (trueEnd.getTime() - clickedGap.start.getTime()) / (1000 * 60);
 
-    // 3. Filtra chi entra perfettamente nel buco
     const candidates = appointments.filter(app => {
       const appStart = app.startTime.toDate();
       const appDuration = (app.endTime.toDate().getTime() - app.startTime.toDate().getTime()) / (1000 * 60);
@@ -1096,7 +1093,6 @@ const handleSaveCustomerEdits = async () => {
               const itemStart = item;
               const itemEnd = addHours(item, 1);
 
-              // 1. Controllo minuti frazionati "Fuori Turno" (Aperture / Chiusure a metà ora)
               activeOpeningHours.forEach(range => {
                 const sH = Math.floor(range.start);
                 const sM = Math.round((range.start - sH) * 60);
@@ -1106,7 +1102,6 @@ const handleSaveCustomerEdits = async () => {
                 const shiftStart = setMinutes(setHours(startOfDay(selectedDate), sH), sM);
                 const shiftEnd = setMinutes(setHours(startOfDay(selectedDate), eH), eM);
 
-                // CASO A: Apertura frazionata (es. Apertura ore 08:45 nella riga delle 08:00)
                 if (isBefore(itemStart, shiftStart) && isBefore(shiftStart, itemEnd)) {
                   offRange = {
                     start: itemStart,
@@ -1114,7 +1109,6 @@ const handleSaveCustomerEdits = async () => {
                     label: `Apertura ore ${format(shiftStart, 'HH:mm')}`
                   };
                 }
-                // CASO B: Chiusura frazionata (es. Apertura fino alle ore 13:15 nella riga delle 13:00 o 20:30 nella riga delle 20:00)
                 else if (isBefore(itemStart, shiftEnd) && isBefore(shiftEnd, itemEnd)) {
                   offRange = {
                     start: shiftEnd,
@@ -1124,7 +1118,6 @@ const handleSaveCustomerEdits = async () => {
                 }
               });
 
-              // 2. Controllo Pausa Salone Totale (Solamente se l'ora è COMPLETAMENTE fuori dai turni)
               if (!offRange && activeOpeningHours.length > 1) {
                 const shift1EndH = Math.floor(activeOpeningHours[0].end);
                 const shift2StartH = Math.floor(activeOpeningHours[1].start);
@@ -1153,11 +1146,10 @@ const handleSaveCustomerEdits = async () => {
                 activeOpeningHours = businessSettings.weeklySchedule[dayOfWeek].shifts;
               }
 
-              const itemStart = item; // Es. 11:00
-              const itemEnd = addHours(item, 1); // Es. 12:00
+              const itemStart = item; 
+              const itemEnd = addHours(item, 1); 
               const nowPlus30 = addMinutes(currentTime, 30);
 
-              // Troviamo il turno attivo per questo slot
               const currentShift = activeOpeningHours.find(range => {
                 const sH = Math.floor(range.start);
                 const sM = Math.round((range.start - sH) * 60);
@@ -1179,27 +1171,20 @@ const handleSaveCustomerEdits = async () => {
                 const eM = Math.round((currentShift.end - eH) * 60);
                 const shiftEnd = setMinutes(setHours(startOfDay(selectedDate), eH), eM);
 
-                // Marker iniziale di base per quest'ora (rispettando l'apertura del turno)
                 let currentMarker = isBefore(itemStart, shiftStart) ? shiftStart : itemStart;
                 const realSlotEnd = isAfter(itemEnd, shiftEnd) ? shiftEnd : itemEnd;
 
-                // Prendiamo TUTTI gli appuntamenti del giorno che intersecano questa riga oraria,
-                // non solo quelli che INIZIANO in quest'ora!
                 const dayAppointmentsInSlot = filteredAppointments.filter(app => {
                   if (app.status === 'cancelled') return false;
                   const appStart = app.startTime.toDate();
                   const appEnd = app.endTime.toDate();
-                  // L'appuntamento interseca la riga se inizia prima della fine dello slot E finisce dopo l'inizio dello slot
                   return isBefore(appStart, realSlotEnd) && isAfter(appEnd, currentMarker);
                 }).sort((a, b) => a.startTime.toMillis() - b.startTime.toMillis());
 
-                // Se un appuntamento è iniziato prima (es. 10:45) e finisce dentro quest'ora (es. 11:30),
-                // aggiorniamo subito il marker iniziale per spingerlo alle 11:30!
                 dayAppointmentsInSlot.forEach(app => {
                   const appStart = app.startTime.toDate();
                   const appEnd = app.endTime.toDate();
 
-                  // Se c'è uno spazio libero PRIMA dell'inizio di questo appuntamento
                   if (isBefore(currentMarker, appStart) && isBefore(appStart, realSlotEnd)) {
                     const dur = (appStart.getTime() - currentMarker.getTime()) / 60000;
                     if (dur >= 15 && isAfter(currentMarker, nowPlus30)) {
@@ -1207,13 +1192,11 @@ const handleSaveCustomerEdits = async () => {
                     }
                   }
 
-                  // Spostiamo avanti il marker di occupazione fino alla fine dell'appuntamento corrente
                   if (isAfter(appEnd, currentMarker)) {
                     currentMarker = isBefore(appEnd, realSlotEnd) ? appEnd : realSlotEnd;
                   }
                 });
 
-                // Se rimane spazio libero DOPO l'ultimo appuntamento fino alla fine della riga
                 if (isBefore(currentMarker, realSlotEnd)) {
                   const dur = (realSlotEnd.getTime() - currentMarker.getTime()) / 60000;
                   if (dur >= 15 && isAfter(currentMarker, nowPlus30)) {
@@ -1223,7 +1206,6 @@ const handleSaveCustomerEdits = async () => {
               }
             }
 
-            // Uniamo Elementi e Buchi
             const combinedItems = [
               ...apps.map(a => ({ type: 'app' as const, data: a, start: a.startTime.toDate() })), 
               ...gapsForThisItem.map(g => ({ type: 'gap' as const, data: g, start: g.start }))
@@ -1231,7 +1213,6 @@ const handleSaveCustomerEdits = async () => {
 
             return (
               <div key={item.toISOString()} className={cn("flex min-h-[60px] relative", isBreak && "bg-gray-50/50")}>
-                {/* Past Time Overlay */}
                 {isSameDay(selectedDate, currentTime) && isBefore(addHours(item, 1), currentTime) && (
                   <div className="absolute inset-0 bg-gray-200/30 backdrop-grayscale-[0.5] z-10 pointer-events-none" />
                 )}
@@ -1241,14 +1222,12 @@ const handleSaveCustomerEdits = async () => {
                 </div>
                 <div className="flex-1 p-1.5 flex gap-2 overflow-x-auto scrollbar-thin scrollbar-thumb-gray-200 scrollbar-track-transparent items-center">
                   
-                  {/* CASO 1: Pausa Salone Completa */}
                   {isBreak ? (
                     <div className="flex items-center justify-center w-full text-gray-300 text-[10px] font-bold uppercase tracking-widest italic">
                       Pausa Salone
                     </div>
                   ) : (
                     <>
-                      {/* CASO 2A: Overlay Apertura (Posizionato sulla SINISTRA dello slot) */}
                       {offRange && offRange.label.includes('Apertura') && (
                         <div 
                           style={{ 
@@ -1263,7 +1242,6 @@ const handleSaveCustomerEdits = async () => {
                         </div>
                       )}
 
-                      {/* CASO 3: Appuntamenti e Buchi Orari */}
                       {combinedItems.length === 0 && !offRange ? (
                         <div className="flex-1"></div>
                       ) : (
@@ -1292,7 +1270,6 @@ const handleSaveCustomerEdits = async () => {
                           const app = itemObj.data as Appointment & { customer?: UserProfile };
                           const duration = (app.endTime.toDate().getTime() - app.startTime.toDate().getTime()) / (1000 * 60);
                           
-                          // 🚀 CALCOLO COMPRESSIONE: Verifichiamo se l'appuntamento ha usato la Flessibilità
                           const nominalDuration = app.services.reduce((acc, s) => acc + s.duration, 0);
                           const isCompressed = duration < nominalDuration;
                           
@@ -1304,7 +1281,6 @@ const handleSaveCustomerEdits = async () => {
                           const isSelected = selectedCandidates.includes(app.id!);
                           const selectionMode = showGapFiller !== null;
 
-                          // 🚀 RILEVAMENTO ADIACENZA (Shift Scope)
                           const isAdjacentNext = selectionMode && Math.abs(app.startTime.toDate().getTime() - showGapFiller!.end.getTime()) < 60000;
                           const isAdjacentPrev = selectionMode && Math.abs(app.endTime.toDate().getTime() - showGapFiller!.start.getTime()) < 60000;
 
@@ -1329,7 +1305,6 @@ const handleSaveCustomerEdits = async () => {
                                 "bg-black text-white" 
                               )}
                             >
-                              {/* 🚀 OVERLAY AZIONE RAPIDA DECOMPRESSIONE */}
                               {(isAdjacentNext || isAdjacentPrev) && !sendingProposal && (
                                 <button 
                                   onClick={(e) => { 
@@ -1345,7 +1320,6 @@ const handleSaveCustomerEdits = async () => {
                                 </button>
                               )}
 
-                              {/* 🚀 BADGE FLESSIBILITÀ (Triangolino Giallo) */}
                               {isCompressed && (
                                 <div 
                                   className="absolute -top-1.5 -right-1.5 bg-amber-400 text-amber-950 text-[7px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded shadow-sm border border-amber-500 z-10 flex items-center gap-0.5 cursor-help"
@@ -1388,7 +1362,6 @@ const handleSaveCustomerEdits = async () => {
                         })
                       )}
 
-                      {/* CASO 2B: Overlay Chiusura (Posizionato sulla DESTRA dello slot) */}
                       {offRange && offRange.label.includes('Chiusura') && (
                         <div 
                           style={{ 
@@ -1844,6 +1817,9 @@ interface ManualBookingModalProps {
 }
 
 function ManualBookingModal({ onClose, onSuccess, businessSettings }: ManualBookingModalProps) {
+  // 🚀 ESTRAZIONE TENANT ID
+  const { tenantId } = useAuth();
+
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [phonePrefix, setPhonePrefix] = useState('+39');
@@ -1856,14 +1832,12 @@ function ManualBookingModal({ onClose, onSuccess, businessSettings }: ManualBook
   const [loading, setLoading] = useState(false);
   const [sendWhatsApp, setSendWhatsApp] = useState(true);
   const [suggestions, setSuggestions] = useState<{ firstName: string, lastName: string, phone: string, email?: string, phonePrefix?: string }[]>([]);
-const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
+  const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
   
-  // 🚀 NUOVO STATO: La "Rubrica Universale" scaricata in memoria (RAM)
   const [globalDirectory, setGlobalDirectory] = useState<{ firstName: string, lastName: string, phone: string, email: string, displayPhone: string, phonePrefix: string }[]>([]);
   const [directoryLoaded, setDirectoryLoaded] = useState(false);
   const [showCalendar, setShowCalendar] = useState(false);
 
-  // Ref per gestire il clic fuori dalla tendina
   const searchContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -1876,67 +1850,39 @@ const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  // 🚀 QUERY MULTI-TENANT
   useEffect(() => {
-    const q = query(collection(db, 'calendar_exceptions'));
+    if (!tenantId) return;
+    const q = query(collection(db, 'salons', tenantId, 'calendar_exceptions'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as SpecialDay[];
       setSpecialDays(docs);
     });
     return () => unsubscribe();
-  }, []);
+  }, [tenantId]);
 
-  // 🚀 STEP 1: CARICAMENTO SINGOLO (Tutto il database in RAM al primo avvio della modale)
-  useEffect(() => {
-    const fetchEntireDirectory = async () => {
+useEffect(() => {
+    if (!tenantId) return;
+    const fetchTenantDirectory = async () => {
       try {
-        const contactsSnap = await getDocs(collection(db, 'contacts'));
-        const usersSnap = await getDocs(collection(db, 'users'));
-        
-        const combined: any[] = [];
-
-        // 1A. Preleviamo tutti gli utenti che usano l'App
-        usersSnap.docs.forEach(doc => {
-          const u = doc.data();
-          if (u.role === 'barber') return; // Escludiamo i barbieri stessi
-          
-          const fullName = u.displayName || '';
-          const parts = fullName.split(' ');
-          const fName = parts[0] || '';
-          const lName = parts.slice(1).join(' ') || '';
-          
-          const rawPhone = (u.phoneNumber || '').replace(/\D/g, '');
-          const cleanPhone = (rawPhone.startsWith('39') && rawPhone.length > 10) ? rawPhone.substring(2) : rawPhone.slice(-10);
-
-          combined.push({
-            firstName: fName,
-            lastName: lName,
-            phone: cleanPhone,
-            phonePrefix: '+39',
-            email: u.email || '',
-            displayPhone: cleanPhone.length >= 9 ? `+39 ${cleanPhone}` : 'Nessun numero'
-          });
-        });
-
-        // 1B. Preleviamo tutti i contatti manuali (La rubrica)
-        contactsSnap.docs.forEach(doc => {
+        const contactsSnap = await getDocs(collection(db, 'salons', tenantId, 'contacts'));
+        const tenantContacts = contactsSnap.docs.map(doc => {
           const c = doc.data();
           const rawPhone = (c.phone || '').replace(/\D/g, '');
           const cleanPhone = (rawPhone.startsWith('39') && rawPhone.length > 10) ? rawPhone.substring(2) : rawPhone.slice(-10);
 
-          combined.push({
+          return {
             firstName: c.firstName || '',
             lastName: c.lastName || '',
             phone: cleanPhone,
-            phonePrefix: '+39',
+            phonePrefix: c.phonePrefix || '+39',
             email: c.email || '',
             displayPhone: cleanPhone.length >= 9 ? `+39 ${cleanPhone}` : 'Nessun numero'
-          });
+          };
         });
 
-        // 1C. Deduplicazione assoluta e definitiva in base al numero
         const uniqueMap = new Map();
-        combined.forEach(item => {
-          // Se ha un numero valido, usa il numero per scartare i cloni. Altrimenti usa il nome.
+        tenantContacts.forEach(item => {
           const key = item.phone && item.phone.length >= 9 ? item.phone : `${item.firstName.toLowerCase()}_${item.lastName.toLowerCase()}_${Math.random()}`;
           if (!uniqueMap.has(key)) {
             uniqueMap.set(key, item);
@@ -1946,15 +1892,14 @@ const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
         setGlobalDirectory(Array.from(uniqueMap.values()));
         setDirectoryLoaded(true);
       } catch (error) {
-        console.error("Errore nel caricamento massivo rubrica:", error);
+        console.error("Errore nel caricamento rubrica del salone:", error);
       }
     };
-    fetchEntireDirectory();
-  }, []);
+    fetchTenantDirectory();
+  }, [tenantId]);
 
-  // 🚀 STEP 2: RICERCA ISTANTANEA (Totalmente slegata da Firebase, fluida come l'acqua)
   useEffect(() => {
-    if (!directoryLoaded) return; // Aspettiamo che la RAM sia piena
+    if (!directoryLoaded) return; 
 
     const searchFirst = firstName.trim().toLowerCase();
     const searchLast = lastName.trim().toLowerCase();
@@ -1967,8 +1912,6 @@ const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
     const filtered = globalDirectory.filter(person => {
       const fullContactName = `${person.firstName} ${person.lastName}`.toLowerCase();
       
-      // La logica più permissiva e potente del mondo web (.includes)
-      // Non importa se c'è uno spazio, lui trova la corrispondenza esatta dentro la stringa!
       const matchesFirst = fullContactName.includes(searchFirst);
       const matchesLast = !searchLast || fullContactName.includes(searchLast);
 
@@ -1997,18 +1940,15 @@ const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
     });
   }, [specialDays, businessSettings]);
 
-  // 🚀 MEMOIZZAZIONE REGOLE CALENDARIO BARBIERE
   const disabledDays = React.useMemo(() => {
     return [
       { before: startOfDay(new Date()) },
       (date: Date) => {
         const dateString = format(date, 'yyyy-MM-dd');
-        // 1. Controllo Eccezioni (Ferie o APERTURE STRAORDINARIE)
         const exception = specialDays.find(ex => ex.date === dateString);
         if (exception) {
           return exception.isClosed;
         }
-        // 2. Controllo giorni di chiusura standard
         if (!businessSettings.weeklySchedule[getDay(date)]?.isOpen) return true;
         
         return false;
@@ -2025,6 +1965,7 @@ const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
   }, [selectedDate, selectedServices, businessSettings]);
 
   const calculateSlots = async () => {
+    if (!tenantId) return;
     setLoading(true);
     const dayStart = startOfDay(selectedDate);
     const dayEnd = endOfDay(selectedDate);
@@ -2047,8 +1988,9 @@ const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
     }
 
     try {
+      // 🚀 QUERY MULTI-TENANT
       const q = query(
-        collection(db, 'appointments'),
+        collection(db, 'salons', tenantId, 'appointments'),
         where('startTime', '>=', Timestamp.fromDate(dayStart)),
         where('startTime', '<=', Timestamp.fromDate(dayEnd))
       );
@@ -2057,25 +1999,22 @@ const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
         .map(doc => doc.data() as Appointment)
         .filter(app => app.status === 'booked');
 
-      // 🚀 Adapter: Mappatura appuntamenti esistenti con calcolo dello "stato di stress" (isCompressed)
       const mappedAppointments = dayAppointments.map(app => {
         const actualDuration = (app.endTime.toDate().getTime() - app.startTime.toDate().getTime()) / 60000;
         const nominalDuration = app.services.reduce((acc, s) => acc + s.duration, 0);
         return {
           start: app.startTime.toDate(),
           end: app.endTime.toDate(),
-          isCompressed: actualDuration < nominalDuration // true se l'appuntamento è già in modalità "Flex"
+          isCompressed: actualDuration < nominalDuration 
         };
       });
 
-      // 🚀 Adapter: Mappatura catalogo leggendo la flessibilità REALE dalle costanti
       const mappedCatalog = SERVICES.map(s => ({
         id: s.id,
         duration: s.duration,
         flexibility: s.flexibility || 0 
       }));
 
-      // 🚀 Adapter: Somma durata e flessibilità per combo di servizi multipli
       const totalDuration = selectedServices.reduce((acc, s) => acc + s.duration, 0);
       const totalFlexibility = selectedServices.reduce((acc, s) => acc + (s.flexibility || 0), 0);
 
@@ -2087,7 +2026,6 @@ const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
 
       let allValidSlots: Date[] = [];
 
-      // Esecuzione del motore per ogni turno di lavoro della giornata
       activeOpeningHours.forEach(range => {
         const startHour = Math.floor(range.start);
         const startMin = Math.round((range.start - startHour) * 60);
@@ -2108,12 +2046,10 @@ const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
         allValidSlots = [...allValidSlots, ...shiftSlots];
       });
 
-      // Ordinamento cronologico finale e deduplicazione
       const uniqueSortedSlots = Array.from(new Set(allValidSlots.map(d => d.getTime())))
         .map(time => new Date(time))
         .sort((a, b) => a.getTime() - b.getTime());
 
-      // Filtra slot passati se la data selezionata è oggi
       const now = new Date();
       setAvailableSlots(uniqueSortedSlots.filter(slot => isAfter(slot, now)));
     } catch (error) {
@@ -2124,7 +2060,7 @@ const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
   };
 
   const handleBooking = async () => {
-    if (!firstName || !lastName || !phone || !selectedSlot || selectedServices.length === 0) {
+    if (!firstName || !lastName || !phone || !selectedSlot || selectedServices.length === 0 || !tenantId) {
       alert("Nome, Cognome, Telefono, Servizi e Orario sono obbligatori.");
       return;
     }
@@ -2143,13 +2079,12 @@ const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
     const totalDuration = selectedServices.reduce((acc, s) => acc + s.duration, 0);
     const totalAmount = selectedServices.reduce((acc, s) => acc + s.price, 0);
     
-    // 🚀 CALCOLO DURATA COMPRESSA REALE
     const dayStart = startOfDay(selectedSlot);
     const dayEnd = endOfDay(selectedSlot);
     
-    // Scarichiamo gli appuntamenti per trovare gli ostacoli (usiamo direttamente il DB per sicurezza massima)
+    // 🚀 QUERY MULTI-TENANT
     const qDay = query(
-      collection(db, 'appointments'),
+      collection(db, 'salons', tenantId, 'appointments'),
       where('startTime', '>=', Timestamp.fromDate(dayStart)),
       where('startTime', '<=', Timestamp.fromDate(dayEnd)),
       where('status', '==', 'booked')
@@ -2157,7 +2092,6 @@ const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
     const daySnap = await getDocs(qDay);
     const dayApps = daySnap.docs.map(d => d.data() as Appointment).sort((a, b) => a.startTime.toMillis() - b.startTime.toMillis());
 
-    // Troviamo la fine del turno
     const dateString = format(selectedSlot, 'yyyy-MM-dd');
     const dayOfWeek = getDay(selectedSlot);
     const exception = specialDays.find(ex => ex.date === dateString);
@@ -2179,7 +2113,6 @@ const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
       }
     }
 
-    // Calcoliamo il vero endTime
     const nextApp = dayApps.find(a => a.startTime.toMillis() > selectedSlot.getTime());
     const obstacleTime = nextApp && isBefore(nextApp.startTime.toDate(), shiftEnd) ? nextApp.startTime.toDate() : shiftEnd;
     
@@ -2187,7 +2120,6 @@ const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
     const actualDuration = Math.min(totalDuration, availableMins);
     const endTime = addMinutes(selectedSlot, actualDuration);
 
-    // Costruiamo i formati
     const fullPhoneNumber = `+39${pure10Digits}`;
     const cleanContactPhone = pure10Digits;
 
@@ -2195,12 +2127,12 @@ const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
       let finalCustomerId = 'manual_entry';
       let isRegisteredUser = false;
 
+      // 🚀 USERS RESTA ALLA RADICE GLOBALE
       const usersRef = collection(db, 'users');
       const userQuery = query(usersRef, where('phoneNumber', '==', fullPhoneNumber), limit(1));
       const userSnapshot = await getDocs(userQuery);
 
       if (!userSnapshot.empty) {
-        // 🟢 L'UTENTE ESISTE (Niente Rubrica)
         finalCustomerId = userSnapshot.docs[0].id;
         isRegisteredUser = true;
 
@@ -2210,11 +2142,11 @@ const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
           updatedAt: Timestamp.now()
         });
 
-        // Purge: Cancelliamo il contatto in rubrica se c'era
-        try { await deleteDoc(doc(db, 'contacts', cleanContactPhone)); } catch(e) {}
+        // 🚀 ELIMINA DA CONTATTI DEL SALONE SE ESISTE
+        try { await deleteDoc(doc(db, 'salons', tenantId, 'contacts', cleanContactPhone)); } catch(e) {}
       } else {
-        // 🟠 L'UTENTE NON ESISTE (Creiamo/Aggiorniamo in Rubrica)
-        await setDoc(doc(db, 'contacts', cleanContactPhone), {
+        // 🚀 SALVA CONTATTO NEL SALONE
+        await setDoc(doc(db, 'salons', tenantId, 'contacts', cleanContactPhone), {
           firstName,
           lastName,
           firstNameLower: firstName.toLowerCase(),
@@ -2226,18 +2158,18 @@ const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
         }, { merge: true });
       }
 
-      // Creazione Appuntamento
+      // 🚀 QUERY MULTI-TENANT PER CANCELLARE OVERLAPS E SALVARE
       const q = query(
-        collection(db, 'appointments'),
+        collection(db, 'salons', tenantId, 'appointments'),
         where('startTime', '==', Timestamp.fromDate(selectedSlot)),
         where('status', '==', 'cancelled')
       );
       const cancelledSnapshot = await getDocs(q);
       for (const d of cancelledSnapshot.docs) {
-        await deleteDoc(doc(db, 'appointments', d.id));
+        await deleteDoc(doc(db, 'salons', tenantId, 'appointments', d.id));
       }
       
-      const newAppointmentRef = await addDoc(collection(db, 'appointments'), {
+      const newAppointmentRef = await addDoc(collection(db, 'salons', tenantId, 'appointments'), {
         customerId: finalCustomerId,
         customer: {
           displayName: `${firstName} ${lastName}`,
@@ -2254,7 +2186,7 @@ const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
       });
 
       if (isRegisteredUser) {
-        await addDoc(collection(db, 'notifications'), {
+        await addDoc(collection(db, 'salons', tenantId, 'notifications'), {
           userId: finalCustomerId,
           title: 'Nuovo Appuntamento Fissato',
           message: `Il barbiere ha inserito un appuntamento per te il ${format(selectedSlot, 'd MMM')} alle ${format(selectedSlot, 'HH:mm')}`,
@@ -2515,7 +2447,7 @@ const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
           </div>
 
           <button
-            disabled={loading || !firstName || !lastName || !phone || !selectedSlot || selectedServices.length === 0}
+            disabled={loading || !firstName || !lastName || !phone || !selectedSlot || selectedServices.length === 0 || !tenantId}
             onClick={handleBooking}
             className="w-full py-4 bg-black text-white rounded-2xl font-bold hover:bg-gray-800 transition-all disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-xl"
           >

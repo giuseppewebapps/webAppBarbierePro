@@ -1,6 +1,7 @@
 import React from 'react';
 import { MessageCircle } from 'lucide-react';
 import { generateWhatsAppLink } from '../utils/whatsapp';
+import { useAuth } from '../context/AuthContext'; // 🚀 Importiamo il contesto SaaS
 
 interface WhatsAppButtonProps {
   type: string;
@@ -8,7 +9,8 @@ interface WhatsAppButtonProps {
   customerPhone?: string;
   date: string;
   time: string;
-  className?: string; // Per permetterti di personalizzare i colori in base al popup
+  label?: string; // 🚀 Aggiunto per supportare testi dinamici ("Conferma su WhatsApp", ecc.)
+  className?: string; 
 }
 
 export const WhatsAppButton: React.FC<WhatsAppButtonProps> = ({
@@ -17,12 +19,17 @@ export const WhatsAppButton: React.FC<WhatsAppButtonProps> = ({
   customerPhone,
   date,
   time,
+  label = "Avvisa su WhatsApp",
   className = "w-full py-4 bg-[#25D366] text-white rounded-2xl font-bold hover:bg-[#20bd5a] transition-all flex items-center justify-center gap-2"
 }) => {
-  // Se non c'è il numero, il bottone non viene proprio renderizzato (niente errori in UI)
-  if (!customerPhone) return null;
+  // 🚀 Estraiamo il tenant corrente
+  const { tenantId } = useAuth();
 
-  const link = generateWhatsAppLink(type, customerName, customerPhone, date, time);
+  // Se manca il telefono o il tenant non è ancora caricato, non renderizziamo
+  if (!customerPhone || !tenantId) return null;
+
+  // 🚀 Passiamo il tenantId al motore che genera il testo, così saprà quale nome salone usare
+  const link = generateWhatsAppLink(type, customerName, customerPhone, date, time, tenantId);
 
   if (!link) return null;
 
@@ -33,7 +40,7 @@ export const WhatsAppButton: React.FC<WhatsAppButtonProps> = ({
       rel="noopener noreferrer"
       className={className}
     >
-      <MessageCircle size={20} /> Avvisa su WhatsApp
+      <MessageCircle size={20} /> {label}
     </a>
   );
 };

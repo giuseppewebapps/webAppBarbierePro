@@ -7,6 +7,7 @@ import { XCircle, Check, Calendar, ArrowLeft, Plus, Trash2 } from 'lucide-react'
 import { cn } from '../lib/utils';
 import { format, getDay } from 'date-fns';
 import { it } from 'date-fns/locale';
+import { useAuth } from '../context/AuthContext'; // 🚀 Aggiunto import del contesto
 
 interface ScheduleSettingsModalProps {
   onClose: () => void;
@@ -24,16 +25,18 @@ const DAYS_OF_WEEK = [
 ];
 
 export default function ScheduleSettingsModal({ onClose }: ScheduleSettingsModalProps) {
+  // 🚀 Estrazione tenantId
+  const { tenantId } = useAuth();
+
   const [schedule, setSchedule] = useState<WeeklySchedule>(DEFAULT_WEEKLY_SCHEDULE);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  // Genera le opzioni per la tendina (scatti di 15 minuti)
   const timeOptions = React.useMemo(() => {
     const options = [];
     for (let h = 0; h < 24; h++) {
       for (let m = 0; m < 60; m += 15) {
-        const value = h + (m / 60); // Es. 8:30 diventa 8.5
+        const value = h + (m / 60); 
         const label = `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
         options.push({ value, label });
       }
@@ -43,16 +46,16 @@ export default function ScheduleSettingsModal({ onClose }: ScheduleSettingsModal
 
   useEffect(() => {
     const fetchSettings = async () => {
+      if (!tenantId) return; // 🚀 Sicurezza
       try {
-        const docSnap = await getDoc(doc(db, 'settings', 'business_hours'));
+        // 🚀 Lettura confinata al tenant
+        const docSnap = await getDoc(doc(db, 'salons', tenantId, 'settings', 'business_hours'));
         if (docSnap.exists()) {
           const data = docSnap.data();
           
           if (data.weeklySchedule) {
-            // Se esiste già la nuova struttura, la carica
             setSchedule(data.weeklySchedule);
           } else if (data.openingHours && data.closedDays) {
-            // 🚀 MIGRATOR AUTOMATICO: Converte i vecchi dati monolitici nella nuova mappa 7-day
             const migratedSchedule: WeeklySchedule = { ...DEFAULT_WEEKLY_SCHEDULE };
             for (let i = 0; i <= 6; i++) {
               const isClosed = data.closedDays.includes(i);
@@ -71,19 +74,20 @@ export default function ScheduleSettingsModal({ onClose }: ScheduleSettingsModal
       }
     };
     fetchSettings();
-  }, []);
+  }, [tenantId]);
 
   const handleSave = async () => {
+    if (!tenantId) return; // 🚀 Sicurezza
     setSaving(true);
     try {
-      // 🚀 SCUDO ANTI-CONFLITTO GLOBALE
+      // 🚀 SCUDO ANTI-CONFLITTO CONFINATO AL TENANT
       const now = new Date();
       
-      const exceptionsSnap = await getDocs(collection(db, 'calendar_exceptions'));
+      const exceptionsSnap = await getDocs(collection(db, 'salons', tenantId, 'calendar_exceptions'));
       const exceptions = exceptionsSnap.docs.map(d => d.data() as SpecialDay);
 
       const qApps = query(
-        collection(db, 'appointments'),
+        collection(db, 'salons', tenantId, 'appointments'),
         where('startTime', '>=', Timestamp.fromDate(now)),
         where('status', '==', 'booked')
       );
@@ -98,7 +102,6 @@ export default function ScheduleSettingsModal({ onClose }: ScheduleSettingsModal
         const appEnd = app.endTime.toDate();
         const dateString = format(appStart, 'yyyy-MM-dd');
         
-        // Ignora i giorni che hanno un'eccezione specifica salvata
         if (exceptions.some(ex => ex.date === dateString)) continue;
 
         const dayOfWeek = getDay(appStart);
@@ -126,9 +129,9 @@ export default function ScheduleSettingsModal({ onClose }: ScheduleSettingsModal
         setSaving(false);
         return;
       }
-      // Fine Scudo
 
-      await setDoc(doc(db, 'settings', 'business_hours'), {
+      // 🚀 Scrittura confinata al tenant
+      await setDoc(doc(db, 'salons', tenantId, 'settings', 'business_hours'), {
         weeklySchedule: schedule,
         updatedAt: Timestamp.now()
       }, { merge: true });
@@ -151,7 +154,6 @@ export default function ScheduleSettingsModal({ onClose }: ScheduleSettingsModal
         [dayId]: {
           ...prev[dayId],
           isOpen: !isCurrentlyOpen,
-          // Se lo stiamo aprendo e non ha turni, diamo un orario base per comodità
           shifts: !isCurrentlyOpen && prev[dayId].shifts.length === 0 
             ? [{ start: 8, end: 13 }, { start: 15, end: 20 }] 
             : prev[dayId].shifts
@@ -176,7 +178,7 @@ export default function ScheduleSettingsModal({ onClose }: ScheduleSettingsModal
       ...prev,
       [dayId]: {
         ...prev[dayId],
-        shifts: [...prev[dayId].shifts, { start: 14, end: 20 }] // Default per un nuovo turno
+        shifts: [...prev[dayId].shifts, { start: 14, end: 20 }] 
       }
     }));
   };
@@ -195,7 +197,6 @@ export default function ScheduleSettingsModal({ onClose }: ScheduleSettingsModal
   return (
     <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in">
       <div className="bg-white rounded-[32px] w-full max-w-2xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
-        {/* HEADER CON BOTTONE TORNA INDIETRO */}
         <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
           <div className="flex items-center gap-3">
             <button 
@@ -224,7 +225,6 @@ export default function ScheduleSettingsModal({ onClose }: ScheduleSettingsModal
               return (
                 <div key={day.id} className={cn("rounded-2xl border transition-all duration-300", dayData.isOpen ? "bg-white border-gray-200 shadow-sm" : "bg-gray-50 border-gray-100 grayscale-[0.5]")}>
                   
-                  {/* Intestazione del Giorno */}
                   <div className="p-4 flex items-center justify-between cursor-pointer" onClick={() => toggleDayOpen(day.id)}>
                     <div className="flex items-center gap-3">
                       <div className={cn("w-2 h-2 rounded-full", dayData.isOpen ? "bg-emerald-500" : "bg-red-500")} />
@@ -239,12 +239,11 @@ export default function ScheduleSettingsModal({ onClose }: ScheduleSettingsModal
                         checked={dayData.isOpen} 
                         onChange={() => toggleDayOpen(day.id)}
                         className="w-5 h-5 rounded cursor-pointer accent-black"
-                        onClick={(e) => e.stopPropagation()} // Evita il doppio click col div padre
+                        onClick={(e) => e.stopPropagation()} 
                       />
                     </div>
                   </div>
 
-                  {/* Fasce Orarie (Visibili solo se aperto) */}
                   {dayData.isOpen && (
                     <div className="px-4 pb-4 space-y-3 animate-in fade-in slide-in-from-top-2">
                       <div className="w-full h-px bg-gray-100 mb-2"></div>
@@ -283,7 +282,7 @@ export default function ScheduleSettingsModal({ onClose }: ScheduleSettingsModal
                         </div>
                       ))}
 
-                      {dayData.shifts.length < 3 && ( // Limite ragionevole a 3 turni giornalieri
+                      {dayData.shifts.length < 3 && ( 
                         <button 
                           onClick={() => addShift(day.id)}
                           className="w-full py-2.5 border-2 border-dashed border-gray-200 text-gray-500 rounded-xl text-xs font-bold hover:border-black hover:text-black transition-all flex items-center justify-center gap-2"
@@ -299,7 +298,7 @@ export default function ScheduleSettingsModal({ onClose }: ScheduleSettingsModal
           </div>
         )}
 
-        <div className="p-6 border-t border-gray-100 bg-gray-50/50">
+        <div className="p-6 border-t border-gray-100 flex gap-3 bg-gray-50 sticky bottom-0">
           <button
             disabled={saving || loading}
             onClick={handleSave}

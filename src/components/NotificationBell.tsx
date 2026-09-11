@@ -6,6 +6,7 @@ import { it } from 'date-fns/locale';
 import { doc, updateDoc, deleteDoc, writeBatch } from 'firebase/firestore';
 import { db } from '../firebase';
 import { cn } from '../lib/utils';
+import { useAuth } from '../context/AuthContext'; // 🚀 Aggiunto import del contesto
 
 interface NotificationBellProps {
   notifications: AppNotification[];
@@ -13,8 +14,11 @@ interface NotificationBellProps {
 }
 
 export default function NotificationBell({ notifications, onNotificationClick }: NotificationBellProps) {
+  // 🚀 Estrazione tenantId
+  const { tenantId } = useAuth();
+  
   const [isOpen, setIsOpen] = useState(false);
-  const [isClearing, setIsClearing] = useState(false); // Nuovo stato per il caricamento
+  const [isClearing, setIsClearing] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const prevCountRef = useRef(notifications.length);
@@ -69,23 +73,27 @@ export default function NotificationBell({ notifications, onNotificationClick }:
   }, []);
 
   const markAsRead = async (id: string) => {
+    if (!tenantId) return;
     try {
-      await updateDoc(doc(db, 'notifications', id), { read: true });
+      // 🚀 Scrittura confinata al tenant
+      await updateDoc(doc(db, 'salons', tenantId, 'notifications', id), { read: true });
     } catch (error) {
       console.error('Error marking notification as read:', error);
     }
   };
 
   const deleteNotification = async (id: string) => {
+    if (!tenantId) return;
     try {
-      await deleteDoc(doc(db, 'notifications', id));
+      // 🚀 Eliminazione confinata al tenant
+      await deleteDoc(doc(db, 'salons', tenantId, 'notifications', id));
     } catch (error) {
       console.error('Error deleting notification:', error);
     }
   };
 
-  // 🚀 NUOVA FUNZIONE: Elimina tutte le notifiche non lette in un solo colpo
   const handleClearAllUnread = async () => {
+    if (!tenantId) return;
     const unreadNotifs = notifications.filter(n => !n.read);
     if (unreadNotifs.length === 0) return;
     
@@ -93,7 +101,8 @@ export default function NotificationBell({ notifications, onNotificationClick }:
     try {
       const batch = writeBatch(db);
       unreadNotifs.forEach(notif => {
-        const notifRef = doc(db, 'notifications', notif.id!);
+        // 🚀 Batch delete confinato al tenant
+        const notifRef = doc(db, 'salons', tenantId, 'notifications', notif.id!);
         batch.delete(notifRef);
       });
       await batch.commit();
@@ -124,7 +133,6 @@ export default function NotificationBell({ notifications, onNotificationClick }:
           <div className="p-4 border-b border-gray-100/50 flex justify-between items-center bg-gray-50/50">
             <h3 className="font-bold">Notifiche</h3>
             
-            {/* 🚀 L'intestazione ora mostra il bottone SVUOTA se ci sono notifiche non lette */}
             <div className="flex items-center gap-3">
               <span className="text-xs text-gray-400">{unreadCount} non lette</span>
               {unreadCount > 0 && (
@@ -187,7 +195,7 @@ export default function NotificationBell({ notifications, onNotificationClick }:
                         )}
                         <button
                           onClick={(e) => {
-                            e.stopPropagation(); // Previene il click sull'intera notifica
+                            e.stopPropagation();
                             deleteNotification(n.id!);
                           }}
                           className="p-1 text-red-400 hover:bg-red-50 rounded"

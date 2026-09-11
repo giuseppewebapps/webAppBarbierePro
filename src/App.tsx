@@ -26,29 +26,15 @@ import {
 } from 'firebase/firestore';
 import { auth, db } from './firebase';
 import { UserProfile, UserRole, Notification as AppNotification } from './types';
-import { BARBER_EMAILS, COUNTRY_CODES } from './constants';
+import { COUNTRY_CODES } from './constants'; // 🚀 Rimosso BARBER_EMAILS
 import BarberDashboard from './components/BarberDashboard';
 import CustomerBooking from './components/CustomerBooking';
 import { LogOut, Scissors, Plus, Clock as ClockIcon, Phone } from 'lucide-react';
 import NotificationBell from './components/NotificationBell';
 import { autoLinkAppointments } from './utils/appointmentLinker';
 import { logSystemError } from './utils/logger';
-
-interface AuthContextType {
-  user: FirebaseUser | null;
-  profile: UserProfile | null;
-  loading: boolean;
-  login: () => Promise<void>;
-  logout: () => Promise<void>;
-}
-
-const AuthContext = createContext<AuthContextType | undefined>(undefined);
-
-export const useAuth = () => {
-  const context = useContext(AuthContext);
-  if (!context) throw new Error('useAuth must be used within AuthProvider'); 
-  return context;
-};
+import { getTenantId } from './utils/tenantResolver';
+import { AuthContext } from './context/AuthContext';
 
 export default function App() {
   const [user, setUser] = useState<FirebaseUser | null>(null);
@@ -58,16 +44,24 @@ export default function App() {
   const [selectedProposalId, setSelectedProposalId] = useState<string | null>(null);
   const [selectedAppointmentId, setSelectedAppointmentId] = useState<string | null>(null);
   const [selectedNotificationType, setSelectedNotificationType] = useState<string | null>(null);
+  
+  const tenantId = getTenantId();
+  
+  // 🚀 Nome dinamico del salone basato sul tenant (es: "medo-hair" -> "Medo Hair")
+  const salonName = tenantId.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
 
-  // Stati per gestire l'accesso con Email e Password
   const [name, setName] = useState('');
   const [phoneNumber, setPhoneNumber] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isLoginMode, setIsLoginMode] = useState(true);
   const [authError, setAuthError] = useState('');
-
   const [resetMessage, setResetMessage] = useState('');
+
+  const [showPhoneModal, setShowMandatoryPhoneModal] = useState(false);
+  const [tempPhone, setTempPhone] = useState('');
+  const [phonePrefix, setTempPhonePrefix] = useState('+39');
+  const [savingPhone, setSavingPhone] = useState(false);
 
   const handlePasswordReset = async () => {
     setAuthError('');
@@ -77,7 +71,7 @@ export default function App() {
       return;
     }
     try {
-      auth.languageCode = 'it'; // 🚀 Forza la lingua italiana per l'email
+      auth.languageCode = 'it';
       await sendPasswordResetEmail(auth, email);
       setResetMessage('Ti abbiamo inviato un\'email con le istruzioni per ripristinare la password.');
     } catch (error: any) {
@@ -88,20 +82,14 @@ export default function App() {
     }
   };
 
-  // Stati per la modale del numero di telefono obbligatorio
-  const [showPhoneModal, setShowMandatoryPhoneModal] = useState(false);
-  const [tempPhone, setTempPhone] = useState('');
-  const [phonePrefix, setTempPhonePrefix] = useState('+39');
-  const [savingPhone, setSavingPhone] = useState(false);
-
   useEffect(() => {
-    if (!user) { 
+    if (!user || !tenantId) { 
       setNotifications([]);
       return; 
     }
 
     const q = query(
-      collection(db, 'notifications'),
+      collection(db, 'salons', tenantId, 'notifications'),
       where('userId', '==', user.uid),
       where('read', '==', false),
       orderBy('createdAt', 'desc'),
@@ -117,43 +105,37 @@ export default function App() {
     });
 
     return () => unsubscribe();
-  }, [user]);
+  }, [user, tenantId]);
 
   useEffect(() => {
     if (!user) {
       setProfile(null);
       return;
     }
-    const unsubscribe = onSnapshot(doc(db, 'users', user.uid), (docSnap) => {
+    const unsubscribe = onSnapshot(doc(db, 'users', user.uid), async (docSnap) => {
       if (docSnap.exists()) {
-        setProfile(docSnap.data() as UserProfile);
+        const userData = docSnap.data() as UserProfile;
+        
+        // 🚀 RBAC DINAMICO: Controlla in tempo reale se l'utente è nello staff del salone
+        const staffDoc = await getDoc(doc(db, 'salons', tenantId, 'staff', user.uid));
+        userData.role = staffDoc.exists() ? 'barber' : 'customer';
+        
+        setProfile(userData);
       }
     });
     return () => unsubscribe();
-  }, [user]);
+  }, [user, tenantId]);
 
-  // Controlla se l'utente è loggato ma non ha il numero di telefono salvato
- // Effetto che rileva se l'utente è loggato ma non ha il numero di telefono
   useEffect(() => {
     if (user && profile) {
-      // Estrazione sicura
       const phone = typeof profile.phoneNumber === 'string' ? profile.phoneNumber.trim() : '';
       const isDummyNumber = phone === '+390000000000' || phone === '+390000000001' || phone === '+39' || phone.length < 13 || phone.length > 13 || phone.startsWith('+39') === false;
 
-      // LOG DI DEBUG - Visibili in F12
-      console.log("🚀 [DEBUG MODALE] Profilo Firestore:", profile);
-      console.log(`📱 [DEBUG MODALE] Telefono processato: "${phone}" | Lunghezza: ${phone.length}`);
-      console.log(`❓ [DEBUG MODALE] È dummy? ${isDummyNumber}`);
-
       if (!phone || phone === 'undefined' || phone === 'null' || phone.length < 8 || isDummyNumber) {
-        console.log("🛑 [DEBUG MODALE] Condizione SODDISFATTA: Apro la modale!");
         setShowMandatoryPhoneModal(true);
       } else {
-        console.log("✅ [DEBUG MODALE] Condizione FALLITA: Numero valido, nascondo la modale.");
         setShowMandatoryPhoneModal(false);
       }
-    } else {
-       console.log("⏳ [DEBUG MODALE] In attesa del caricamento di user o profile...");
     }
   }, [user, profile]);
 
@@ -173,30 +155,34 @@ export default function App() {
       setUser(firebaseUser);
       if (firebaseUser) {
         const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
-        
         let currentProfile: UserProfile;
 
+        // 🚀 CONTROLLO RUOLO SUL DATABASE DEL SALONE (RBAC)
+        const staffDoc = await getDoc(doc(db, 'salons', tenantId, 'staff', firebaseUser.uid));
+        const dynamicRole: UserRole = staffDoc.exists() ? 'barber' : 'customer';
+
         if (!userDoc.exists()) {
-          const role: UserRole = BARBER_EMAILS.includes(firebaseUser.email || '') ? 'barber' : 'customer';
           currentProfile = {
             uid: firebaseUser.uid,
             email: firebaseUser.email || '',
             displayName: firebaseUser.displayName || 'Utente',
-            role: role,
+            role: dynamicRole,
             phoneNumber: firebaseUser.phoneNumber || '' 
           };
           await setDoc(doc(db, 'users', firebaseUser.uid), currentProfile);
         } else {
           currentProfile = userDoc.data() as UserProfile;
+          currentProfile.role = dynamicRole; // Sovrascrive il ruolo globale con quello locale
         }
 
         if (currentProfile.role === 'customer') {
-          autoLinkAppointments(currentProfile).catch(async (err) => {
+          autoLinkAppointments(currentProfile, tenantId).catch(async (err) => {
             console.error("Errore durante l'autoLink:", err);
             await logSystemError({
               type: 'login_autolink_failure',
               userId: currentProfile.uid,
               userName: currentProfile.displayName,
+              tenantId,
               error: err
             });
           });
@@ -206,7 +192,7 @@ export default function App() {
     });
 
     return () => unsubscribe();
-  }, []);
+  }, [tenantId]);
 
   const login = async () => {
     const provider = new GoogleAuthProvider();
@@ -266,13 +252,12 @@ export default function App() {
         updatedAt: Timestamp.now()
       });
 
-      // 🚀 Lanciamo la sincronizzazione retroattiva ora che abbiamo il numero ufficiale!
       await autoLinkAppointments({
         uid: user.uid,
         displayName: profile?.displayName || 'Cliente',
         email: user.email || '',
         phoneNumber: fullPhone
-      });
+      }, tenantId);
 
       alert("Numero di telefono salvato con successo!");
       setShowMandatoryPhoneModal(false);
@@ -302,7 +287,7 @@ export default function App() {
   }
 
   return (
-    <AuthContext.Provider value={{ user, profile, loading, login, logout }}>
+    <AuthContext.Provider value={{ user, profile, tenantId, loading, login, logout }}>
       <div className="min-h-screen text-black font-sans relative">
         <div 
           className="fixed inset-0 z-0 opacity-80"
@@ -323,7 +308,7 @@ export default function App() {
                   <div className="w-20 h-20 bg-black text-white rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-lg">
                     <Scissors size={40} />
                   </div>
-                  <h1 className="text-3xl font-bold tracking-tight text-black">Medo Hair Salon</h1>
+                  <h1 className="text-3xl font-bold tracking-tight text-black">{salonName}</h1>
                   <p className="text-gray-600 mt-2 text-sm font-medium">Accedi o registrati per prenotare</p>
                 </div>
 
@@ -437,7 +422,7 @@ export default function App() {
                       <Scissors size={24} className="text-white" />
                     </div>
                     <div>
-                      <h1 className="text-lg font-bold tracking-tight">Medo Hair Salon</h1>
+                      <h1 className="text-lg font-bold tracking-tight">{salonName}</h1>
                       <p className="text-[10px] text-gray-400 uppercase tracking-widest">
                         {profile?.role === 'barber' ? 'Calendario Appuntamenti' : `Ciao, ${profile?.displayName}`}
                       </p>
@@ -528,20 +513,16 @@ export default function App() {
           )}
         </div>
 
-        {/* MODALE BLOCCANTE NUMERO DI TELEFONO MANCANTE */}
         {showPhoneModal && (
           <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in">
             <div className="bg-white rounded-[32px] w-full max-w-md p-8 shadow-2xl border border-gray-100 text-center animate-in zoom-in duration-200">
-
               <div className="w-16 h-16 bg-amber-50 text-amber-600 rounded-2xl flex items-center justify-center mx-auto mb-6">
                 <Phone size={32} />
               </div>
-
               <h3 className="text-2xl font-bold text-gray-900 mb-2">Numero di Telefono Richiesto</h3>
               <p className="text-gray-500 text-sm mb-6 leading-relaxed">
                 Serve il tuo numero di telefono per permettere al barbiere di contattarti e confermare i tuoi appuntamenti.
               </p>
-
               <div className="space-y-4 text-left mb-8">
                 <label className="text-xs font-bold text-gray-700 ml-1">Cellulare *</label>
                 <div className="flex gap-2">
@@ -565,7 +546,6 @@ export default function App() {
                   />
                 </div>
               </div>
-
               <button
                 disabled={savingPhone || tempPhone.length < 10}
                 onClick={handleSaveMandatoryPhone}

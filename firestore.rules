@@ -2,19 +2,13 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     
+    // Funzioni Globali
     function isAuthenticated() { return request.auth != null; }
     function isOwner(userId) { return isAuthenticated() && request.auth.uid == userId; }
-    function isAdmin() {
-      return isAuthenticated() && (
-        request.auth.token.email in ['eaglewealth.fs@gmail.com', 'malderadomenico98@gmail.com', 'do.maldera@libero.it', 'sminghioni.holding@gmail.com'] ||
-        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
-         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'barber')
-      );
-    }
 
     function isValidUser(data) {
       return data.keys().hasAll(['uid', 'email', 'role']) && data.uid is string &&
-             data.email is string && data.role in ['barber', 'customer'];
+             data.email is string;
     }
 
     function isValidAppointment(data) {
@@ -22,60 +16,76 @@ service cloud.firestore {
              data.customerId is string && data.status in ['booked', 'cancelled', 'completed'];
     }
 
-    function isValidContact(data) {
-      return data.firstName is string && data.lastName is string && data.phone is string;
-    }
-
     function isValidNotification(data) {
       return data.userId is string && data.type in ['cancellation', 'booking', 'reschedule_proposal', 'manual_management_required', 'proposal_declined'];
     }
 
-    match /settings/{settingId} {
-      allow read: if isAuthenticated();
-      allow write: if isAdmin();
-    }
-
+    // ==========================================
+    // SPAZIO GLOBALE (Identità e Log)
+    // ==========================================
+    
     match /users/{userId} {
       allow read: if isAuthenticated();
       allow create: if isOwner(userId) && isValidUser(request.resource.data);
-      allow update: if isAdmin() || (isOwner(userId) && isValidUser(request.resource.data) && request.resource.data.role == resource.data.role);
-      allow delete: if isAdmin();
-    }
-
-    match /contacts/{contactId} {
-      allow read, write, delete: if isAdmin();
-    }
-
-    match /appointments/{appointmentId} {
-      allow read: if isAuthenticated(); 
-      allow create: if isAuthenticated() && isValidAppointment(request.resource.data);
-      allow update: if isAuthenticated() && (
-        isAdmin() || 
-        // BLOCCO STALE DATA: Il cliente può modificare SOLO se l'appuntamento è ancora 'booked'
-        (resource.data.customerId == request.auth.uid && resource.data.status == 'booked' && isValidAppointment(request.resource.data)) ||
-        (resource.data.customerId == 'manual_entry' && request.resource.data.customerId == request.auth.uid)
-      );
-      allow delete: if isAdmin() || (isAuthenticated() && resource.data.status == 'cancelled') || (isAuthenticated() && resource.data.customerId == request.auth.uid);
-    }
-
-    match /notifications/{notificationId} {
-      allow read, update: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
-      allow create: if isAuthenticated() && isValidNotification(request.resource.data);
-      allow delete: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
-    }
-
-    match /rescheduleProposals/{proposalId} {
-      allow read, write: if isAuthenticated();
+      allow update: if isOwner(userId) && isValidUser(request.resource.data);
+      allow delete: if false; // Solo via Firebase Admin Console
     }
 
     match /system_logs/{logId} {
       allow create: if isAuthenticated();
-      allow read, update, delete: if isAdmin();
+      allow read, update, delete: if false; // Solo via Firebase Admin Console per sicurezza
     }
 
-    match /calendar_exceptions/{exceptionDate} {
-      allow read: if true;
-      allow write: if isAdmin();
+    // ==========================================
+    // SPAZIO MULTI-TENANT (Dati isolati per Salone)
+    // ==========================================
+    
+    match /salons/{tenantId} {
+      
+      // 🚀 NUOVO RBAC: Controlla se l'utente è nello staff del salone corrente
+      function isSalonStaff() {
+        return isAuthenticated() && exists(/databases/$(database)/documents/salons/$(tenantId)/staff/$(request.auth.uid));
+      }
+
+      match /settings/{settingId} {
+        allow read: if true; // I clienti devono leggere gli orari per prenotare
+        allow write: if isSalonStaff();
+      }
+
+      match /contacts/{contactId} {
+        allow read, write, delete: if isSalonStaff();
+      }
+
+      match /appointments/{appointmentId} {
+        allow read: if isAuthenticated(); 
+        allow create: if isAuthenticated() && isValidAppointment(request.resource.data);
+        allow update: if isAuthenticated() && (
+          isSalonStaff() || 
+          (resource.data.customerId == request.auth.uid && resource.data.status == 'booked' && isValidAppointment(request.resource.data)) ||
+          (resource.data.customerId == 'manual_entry' && request.resource.data.customerId == request.auth.uid)
+        );
+        allow delete: if isSalonStaff() || (isAuthenticated() && resource.data.status == 'cancelled') || (isAuthenticated() && resource.data.customerId == request.auth.uid);
+      }
+
+      match /notifications/{notificationId} {
+        allow read, update, delete: if isAuthenticated() && (resource.data.userId == request.auth.uid || isSalonStaff());
+        allow create: if isAuthenticated() && isValidNotification(request.resource.data);
+      }
+
+      match /rescheduleProposals/{proposalId} {
+        allow read, write: if isAuthenticated();
+      }
+
+      match /calendar_exceptions/{exceptionDate} {
+        allow read: if true;
+        allow write: if isSalonStaff();
+      }
+      
+      // La lista dei barbieri autorizzati per questo salone
+      match /staff/{staffId} {
+        allow read: if isAuthenticated();
+        allow write: if false; // Gestibile solo da te (Admin Globale) via console o script Node.js
+      }
     }
 
     match /test/connection {
