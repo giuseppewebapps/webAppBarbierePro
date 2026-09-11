@@ -2101,7 +2101,8 @@ const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
           requestedService,
           mappedCatalog,
           mappedAppointments,
-          { start: shiftStart, end: shiftEnd }
+          { start: shiftStart, end: shiftEnd },
+          true 
         );
 
         allValidSlots = [...allValidSlots, ...shiftSlots];
