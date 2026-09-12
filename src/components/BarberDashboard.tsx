@@ -62,15 +62,10 @@ import {
   Settings
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { useSalonSettings } from '../hooks/useSalonSettings';
 import { WhatsAppButton } from './WhatsAppButton';
 import { generateWhatsAppLink } from '../utils/whatsapp';
-import { 
-  SERVICES, 
-  DEFAULT_WEEKLY_SCHEDULE, 
-  COUNTRY_CODES, 
-  BARBER_EMAILS, 
-  SALON_INFO 
-} from '../constants';
+import { COUNTRY_CODES } from '../constants'; // Manteniamo solo i dati globali
 import { cn } from '../lib/utils';
 import { SpecialDay } from '../types';
 import ScheduleMaintenanceModal from './ScheduleMaintenanceModal';
@@ -115,8 +110,9 @@ interface BarberDashboardProps {
 }
 
 export default function BarberDashboard({ selectedAppointmentId, selectedNotificationType, onAppointmentDialogClose }: BarberDashboardProps) {
-  // 🚀 ESTRAZIONE TENANT ID DAL CONTESTO
+  // 🚀 ESTRAZIONE TENANT ID E SETTINGS SAAS DAL CONTESTO
   const { profile, tenantId } = useAuth();
+  const { settings: salonSettings } = useSalonSettings(tenantId);
   
   const [appointments, setAppointments] = useState<(Appointment & { customer?: UserProfile })[]>([]);
   const [loading, setLoading] = useState(true);
@@ -144,26 +140,6 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
   const [isEditingCustomer, setIsEditingCustomer] = useState(false);
   const [editCustomerForm, setEditCustomerForm] = useState({ firstName: '', lastName: '', phone: '', email: '' });
   const [savingCustomer, setSavingCustomer] = useState(false);
-
-  const [businessSettings, setBusinessSettings] = useState<{
-    weeklySchedule: WeeklySchedule;
-  }>({
-    weeklySchedule: DEFAULT_WEEKLY_SCHEDULE
-  });
-
-  // 🚀 QUERY MULTI-TENANT
-  useEffect(() => {
-    if (!tenantId) return;
-    const unsubscribe = onSnapshot(doc(db, 'salons', tenantId, 'settings', 'business_hours'), (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        setBusinessSettings({
-          weeklySchedule: data.weeklySchedule || DEFAULT_WEEKLY_SCHEDULE
-        });
-      }
-    });
-    return () => unsubscribe();
-  }, [tenantId]);
 
   // 🚀 QUERY MULTI-TENANT
   useEffect(() => {
@@ -524,12 +500,12 @@ const handleSaveCustomerEdits = async () => {
         
         let activeOpeningHours: TimeRange[] = [];
         if (exceptionForToday && !exceptionForToday.isClosed) {
-          activeOpeningHours = exceptionForToday.openingHours?.length ? exceptionForToday.openingHours : (businessSettings.weeklySchedule[dayOfWeek]?.shifts || []);
-        } else if (!exceptionForToday && businessSettings.weeklySchedule[dayOfWeek]?.isOpen) {
-          activeOpeningHours = businessSettings.weeklySchedule[dayOfWeek].shifts;
+          activeOpeningHours = exceptionForToday.openingHours?.length ? exceptionForToday.openingHours : (salonSettings?.weeklySchedule[dayOfWeek]?.shifts || []);
+        } else if (!exceptionForToday && salonSettings?.weeklySchedule[dayOfWeek]?.isOpen) {
+          activeOpeningHours = salonSettings.weeklySchedule[dayOfWeek].shifts;
         }
 
-        if (exceptionForToday?.isClosed || (!exceptionForToday && !businessSettings.weeklySchedule[dayOfWeek]?.isOpen) || activeOpeningHours.length === 0) {
+        if (exceptionForToday?.isClosed || (!exceptionForToday && !salonSettings?.weeklySchedule[dayOfWeek]?.isOpen) || activeOpeningHours.length === 0) {
           return {
             type: 'daily' as const,
             items: eachHourOfInterval({
@@ -741,6 +717,8 @@ const handleSaveCustomerEdits = async () => {
   };
 
   const findCandidatesForGap = (clickedGap: { start: Date, end: Date, appointmentId?: string }) => {
+    if (!salonSettings?.weeklySchedule) return;
+    
     const dayApps = appointments
       .filter(a => isSameDay(a.startTime.toDate(), clickedGap.start) && a.status === 'booked')
       .sort((a, b) => a.startTime.toMillis() - b.startTime.toMillis());
@@ -751,9 +729,9 @@ const handleSaveCustomerEdits = async () => {
     
     let activeHours: TimeRange[] = [];
     if (exception && !exception.isClosed) {
-      activeHours = exception.openingHours?.length ? exception.openingHours : (businessSettings.weeklySchedule[dayOfWeek]?.shifts || []);
+      activeHours = exception.openingHours?.length ? exception.openingHours : (salonSettings.weeklySchedule[dayOfWeek]?.shifts || []);
     } else {
-      activeHours = businessSettings.weeklySchedule[dayOfWeek]?.shifts || [];
+      activeHours = salonSettings.weeklySchedule[dayOfWeek]?.shifts || [];
     }
 
     let currentShiftEnd = setHours(startOfDay(clickedGap.start), 20); 
@@ -1040,7 +1018,8 @@ const handleSaveCustomerEdits = async () => {
                       name || 'Cliente', 
                       phone, 
                       format(proposedTime, 'dd/MM/yyyy'), 
-                      format(proposedTime, 'HH:mm')
+                      format(proposedTime, 'HH:mm'),
+                      tenantId
                     ) : null;
 
                     return (
@@ -1078,16 +1057,16 @@ const handleSaveCustomerEdits = async () => {
             let isBreak = false;
             let offRange: { start: Date, end: Date, label: string } | null = null;
 
-            if (calendarData.type === 'daily') {
+            if (calendarData.type === 'daily' && salonSettings?.weeklySchedule) {
               const dateString = format(selectedDate, 'yyyy-MM-dd');
               const dayOfWeek = getDay(selectedDate);
               const exceptionForToday = specialDays.find(ex => ex.date === dateString);
               
               let activeOpeningHours: TimeRange[] = [];
               if (exceptionForToday && !exceptionForToday.isClosed) {
-                activeOpeningHours = exceptionForToday.openingHours?.length ? exceptionForToday.openingHours : (businessSettings.weeklySchedule[dayOfWeek]?.shifts || []);
-              } else if (!exceptionForToday && businessSettings.weeklySchedule[dayOfWeek]?.isOpen) {
-                activeOpeningHours = businessSettings.weeklySchedule[dayOfWeek].shifts;
+                activeOpeningHours = exceptionForToday.openingHours?.length ? exceptionForToday.openingHours : (salonSettings.weeklySchedule[dayOfWeek]?.shifts || []);
+              } else if (!exceptionForToday && salonSettings.weeklySchedule[dayOfWeek]?.isOpen) {
+                activeOpeningHours = salonSettings.weeklySchedule[dayOfWeek].shifts;
               }
 
               const itemStart = item;
@@ -1134,16 +1113,16 @@ const handleSaveCustomerEdits = async () => {
             // --- CALCOLO BUCHI ORARI (Intelligente e Vincolato ai Turni) ---
             const gapsForThisItem: { start: Date, end: Date, duration: number }[] = [];
             
-            if (!isBreak && !searchTerm && calendarData.type === 'daily') {
+            if (!isBreak && !searchTerm && calendarData.type === 'daily' && salonSettings?.weeklySchedule) {
               const dateString = format(selectedDate, 'yyyy-MM-dd');
               const dayOfWeek = getDay(selectedDate);
               const exceptionForToday = specialDays.find(ex => ex.date === dateString);
               
               let activeOpeningHours: TimeRange[] = [];
               if (exceptionForToday && !exceptionForToday.isClosed) {
-                activeOpeningHours = exceptionForToday.openingHours?.length ? exceptionForToday.openingHours : (businessSettings.weeklySchedule[dayOfWeek]?.shifts || []);
-              } else if (!exceptionForToday && businessSettings.weeklySchedule[dayOfWeek]?.isOpen) {
-                activeOpeningHours = businessSettings.weeklySchedule[dayOfWeek].shifts;
+                activeOpeningHours = exceptionForToday.openingHours?.length ? exceptionForToday.openingHours : (salonSettings.weeklySchedule[dayOfWeek]?.shifts || []);
+              } else if (!exceptionForToday && salonSettings.weeklySchedule[dayOfWeek]?.isOpen) {
+                activeOpeningHours = salonSettings.weeklySchedule[dayOfWeek].shifts;
               }
 
               const itemStart = item; 
@@ -1555,6 +1534,7 @@ const handleSaveCustomerEdits = async () => {
                     activeNotifType === 'proposal_accepted' ? 'Conferma Cambio' :
                     'Chat Gestione Manuale'
                   }
+                  tenantId={tenantId}
                   className="w-full py-4 bg-[#25D366] text-white rounded-2xl font-bold hover:bg-[#20bd5a] transition-all flex items-center justify-center gap-2 shadow-md mb-2"
                 />
 
@@ -1706,6 +1686,7 @@ const handleSaveCustomerEdits = async () => {
                   date={declinedProposalNotif.declinedDetails.originalTime ? format(declinedProposalNotif.declinedDetails.originalTime.toDate(), 'dd/MM/yyyy') : ''}
                   time={declinedProposalNotif.declinedDetails.originalTime ? format(declinedProposalNotif.declinedDetails.originalTime.toDate(), 'HH:mm') : ''}
                   label="Avvisa su WhatsApp"
+                  tenantId={tenantId}
                   className="w-full py-4 bg-[#25D366] text-white rounded-2xl font-bold hover:bg-[#20bd5a] transition-all flex items-center justify-center gap-2"
                 />
               )}
@@ -1754,7 +1735,7 @@ const handleSaveCustomerEdits = async () => {
                       ? app.services.map(s => s.name).join(', ') 
                       : 'Appuntamento';
 
-                    const message = `💈 Medo Hair Salon ti ricorda l’appuntamento di domani alle ore ${time}!`;
+                    const message = `💈 ${salonSettings?.name || 'Salone'} ti ricorda l’appuntamento di domani alle ore ${time}!`;
                     const waLink = phone ? `https://wa.me/${phone.replace(/\D/g, '')}?text=${encodeURIComponent(message)}` : '#';
 
                     return (
@@ -1797,7 +1778,6 @@ const handleSaveCustomerEdits = async () => {
           onSuccess={() => {
             setIsManualBookingOpen(false);
           }}
-          businessSettings={businessSettings}
         />
       )}
 
@@ -1811,21 +1791,19 @@ const handleSaveCustomerEdits = async () => {
 interface ManualBookingModalProps {
   onClose: () => void;
   onSuccess: () => void;
-  businessSettings: {
-    weeklySchedule: WeeklySchedule;
-  };
 }
 
-function ManualBookingModal({ onClose, onSuccess, businessSettings }: ManualBookingModalProps) {
-  // 🚀 ESTRAZIONE TENANT ID
+function ManualBookingModal({ onClose, onSuccess }: ManualBookingModalProps) {
+  // 🚀 ESTRAZIONE TENANT ID E SETTINGS
   const { tenantId } = useAuth();
+  const { settings: salonSettings } = useSalonSettings(tenantId);
 
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [phonePrefix, setPhonePrefix] = useState('+39');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
-  const [selectedServices, setSelectedServices] = useState<typeof SERVICES>([]);
+  const [selectedServices, setSelectedServices] = useState<Service[]>([]);
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [availableSlots, setAvailableSlots] = useState<Date[]>([]);
   const [selectedSlot, setSelectedSlot] = useState<Date | null>(null);
@@ -1931,14 +1909,15 @@ useEffect(() => {
   };
 
   const next30Days = React.useMemo(() => {
+    if (!salonSettings?.weeklySchedule) return [];
     const days = eachDayOfInterval({ start: new Date(), end: addDays(new Date(), 30) });
     return days.filter(d => {
       const dateString = format(d, 'yyyy-MM-dd');
       const exception = specialDays.find(ex => ex.date === dateString);
       if (exception) return !exception.isClosed;
-      return businessSettings.weeklySchedule[getDay(d)]?.isOpen;
+      return salonSettings.weeklySchedule[getDay(d)]?.isOpen;
     });
-  }, [specialDays, businessSettings]);
+  }, [specialDays, salonSettings]);
 
   const disabledDays = React.useMemo(() => {
     return [
@@ -1949,23 +1928,23 @@ useEffect(() => {
         if (exception) {
           return exception.isClosed;
         }
-        if (!businessSettings.weeklySchedule[getDay(date)]?.isOpen) return true;
+        if (!salonSettings?.weeklySchedule[getDay(date)]?.isOpen) return true;
         
         return false;
       }
     ];
-  }, [specialDays, businessSettings]);
+  }, [specialDays, salonSettings]);
 
   useEffect(() => {
-    if (selectedDate && selectedServices.length > 0) {
+    if (selectedDate && selectedServices.length > 0 && salonSettings?.weeklySchedule) {
       calculateSlots();
     } else {
       setAvailableSlots([]);
     }
-  }, [selectedDate, selectedServices, businessSettings]);
+  }, [selectedDate, selectedServices, salonSettings?.weeklySchedule]);
 
   const calculateSlots = async () => {
-    if (!tenantId) return;
+    if (!tenantId || !salonSettings?.weeklySchedule || !salonSettings?.services || !salonSettings?.yieldConfig) return;
     setLoading(true);
     const dayStart = startOfDay(selectedDate);
     const dayEnd = endOfDay(selectedDate);
@@ -1974,7 +1953,7 @@ useEffect(() => {
     const dayOfWeek = getDay(selectedDate);
     const exceptionForToday = specialDays.find(ex => ex.date === dateString);
 
-    if (exceptionForToday?.isClosed || (!exceptionForToday && !businessSettings.weeklySchedule[dayOfWeek]?.isOpen)) {
+    if (exceptionForToday?.isClosed || (!exceptionForToday && !salonSettings.weeklySchedule[dayOfWeek]?.isOpen)) {
       setAvailableSlots([]);
       setLoading(false);
       return;
@@ -1982,9 +1961,9 @@ useEffect(() => {
 
     let activeOpeningHours: TimeRange[] = [];
     if (exceptionForToday && !exceptionForToday.isClosed) {
-      activeOpeningHours = exceptionForToday.openingHours?.length ? exceptionForToday.openingHours : (businessSettings.weeklySchedule[dayOfWeek]?.shifts || []);
+      activeOpeningHours = exceptionForToday.openingHours?.length ? exceptionForToday.openingHours : (salonSettings.weeklySchedule[dayOfWeek]?.shifts || []);
     } else {
-      activeOpeningHours = businessSettings.weeklySchedule[dayOfWeek]?.shifts || [];
+      activeOpeningHours = salonSettings.weeklySchedule[dayOfWeek]?.shifts || [];
     }
 
     try {
@@ -2009,7 +1988,7 @@ useEffect(() => {
         };
       });
 
-      const mappedCatalog = SERVICES.map(s => ({
+      const mappedCatalog = salonSettings.services.map(s => ({
         id: s.id,
         duration: s.duration,
         flexibility: s.flexibility || 0 
@@ -2040,7 +2019,8 @@ useEffect(() => {
           mappedCatalog,
           mappedAppointments,
           { start: shiftStart, end: shiftEnd },
-          true 
+          salonSettings.yieldConfig,
+          true // isManualBooking: bypassa regole di yield
         );
 
         allValidSlots = [...allValidSlots, ...shiftSlots];
@@ -2060,7 +2040,7 @@ useEffect(() => {
   };
 
   const handleBooking = async () => {
-    if (!firstName || !lastName || !phone || !selectedSlot || selectedServices.length === 0 || !tenantId) {
+    if (!firstName || !lastName || !phone || !selectedSlot || selectedServices.length === 0 || !tenantId || !salonSettings?.weeklySchedule) {
       alert("Nome, Cognome, Telefono, Servizi e Orario sono obbligatori.");
       return;
     }
@@ -2098,9 +2078,9 @@ useEffect(() => {
     
     let activeHours: TimeRange[] = [];
     if (exception && !exception.isClosed) {
-      activeHours = exception.openingHours?.length ? exception.openingHours : (businessSettings.weeklySchedule[dayOfWeek]?.shifts || []);
+      activeHours = exception.openingHours?.length ? exception.openingHours : (salonSettings.weeklySchedule[dayOfWeek]?.shifts || []);
     } else {
-      activeHours = businessSettings.weeklySchedule[dayOfWeek]?.shifts || [];
+      activeHours = salonSettings.weeklySchedule[dayOfWeek]?.shifts || [];
     }
     let shiftEnd = dayEnd;
     for (const range of activeHours) {
@@ -2203,7 +2183,8 @@ useEffect(() => {
           firstName, 
           fullPhoneNumber, 
           format(selectedSlot, 'dd/MM/yyyy'), 
-          format(selectedSlot, 'HH:mm')
+          format(selectedSlot, 'HH:mm'),
+          tenantId
         );
         if (link) {
           window.open(link, '_blank');
@@ -2325,7 +2306,7 @@ useEffect(() => {
               <Scissors size={14} /> Servizi
             </h3>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              {SERVICES.map(service => {
+              {(salonSettings?.services || []).map(service => {
                 const isSelected = selectedServices.find(s => s.id === service.id);
                 return (
                   <button

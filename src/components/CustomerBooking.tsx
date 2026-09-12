@@ -15,6 +15,7 @@ import {
 import { db, auth } from '../firebase';
 import { useAuth } from '../context/AuthContext';
 import { notifySystemByEmail } from '../utils/emailNotifier';
+import { useSalonSettings } from '../hooks/useSalonSettings';
 import { 
   format, 
   addMinutes, 
@@ -51,14 +52,8 @@ import {
   MessageCircle
 } from 'lucide-react';
 import { cn } from '../lib/utils';
-import { 
-  SERVICES, 
-  DEFAULT_WEEKLY_SCHEDULE, 
-  COUNTRY_CODES, 
-  BARBER_EMAILS, 
-  SALON_INFO 
-} from '../constants';
-import { Appointment, Service, RescheduleProposal, SpecialDay, TimeRange, WeeklySchedule } from '../types';
+import { COUNTRY_CODES } from '../constants'; // Manteniamo solo i dati globali
+import { Appointment, Service, RescheduleProposal, SpecialDay, TimeRange } from '../types';
 import { calculateOptimalSlots } from '../utils/slotEngine';
 
 enum OperationType {
@@ -174,31 +169,13 @@ export default function CustomerBooking({
   selectedAppointmentId,
   onAppointmentDialogClose
 }: CustomerBookingProps) {
-  // 🚀 ESTRAZIONE TENANT ID DAL CONTESTO
+  
   const { profile, tenantId } = useAuth();
+  
+  // 🚀 Unica fonte di verità per le impostazioni SaaS
+  const { settings: salonSettings } = useSalonSettings(tenantId);
 
-  const [businessSettings, setBusinessSettings] = useState<{
-    weeklySchedule: WeeklySchedule;
-  }>({
-    weeklySchedule: DEFAULT_WEEKLY_SCHEDULE
-  });
-
-const [showCalendar, setShowCalendar] = useState(false);
-
-  // 🚀 QUERY MULTI-TENANT: Impostazioni Orari
-  useEffect(() => {
-    if (!tenantId) return;
-    const unsubscribe = onSnapshot(doc(db, 'salons', tenantId, 'settings', 'business_hours'), (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        setBusinessSettings({
-          weeklySchedule: data.weeklySchedule || DEFAULT_WEEKLY_SCHEDULE
-        });
-      }
-    });
-    return () => unsubscribe();
-  }, [tenantId]);
-
+  const [showCalendar, setShowCalendar] = useState(false);
   const [selectedServices, setSelectedServices] = useState<Service[]>([]);
   const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
   
@@ -212,6 +189,8 @@ const [showCalendar, setShowCalendar] = useState(false);
   }, []); 
 
   const visibleDays = useMemo(() => {
+    if (!salonSettings?.weeklySchedule) return [];
+    
     const days = eachDayOfInterval({
       start: todayNormalized,
       end: maxBookingDate
@@ -222,9 +201,9 @@ const [showCalendar, setShowCalendar] = useState(false);
       const dateString = format(d, 'yyyy-MM-dd');
       const exception = specialDays.find(ex => ex.date === dateString);
       if (exception) return !exception.isClosed;
-      return businessSettings.weeklySchedule[getDay(d)]?.isOpen;
+      return salonSettings.weeklySchedule[getDay(d)]?.isOpen;
     });
-  }, [todayNormalized, specialDays, businessSettings, maxBookingDate]);
+  }, [todayNormalized, specialDays, salonSettings?.weeklySchedule, maxBookingDate]);
 
   const [selectedDate, setSelectedDate] = useState<Date>(visibleDays[0] || todayNormalized);
   const [availableSlots, setAvailableSlots] = useState<Date[]>([]);
@@ -233,9 +212,10 @@ const [showCalendar, setShowCalendar] = useState(false);
   const [fullyBookedDays, setFullyBookedDays] = useState<string[]>([]);
   const [isScanningDays, setIsScanningDays] = useState(false);
 
-  // 🚀 QUERY MULTI-TENANT: Scansione giorni pieni
+  // Scansione giorni pieni
   useEffect(() => {
-    if (!tenantId) return;
+    if (!tenantId || !salonSettings?.yieldConfig || !salonSettings?.services) return;
+    
     const scanVisibleDays = async () => {
       if (selectedServices.length === 0 || visibleDays.length === 0) {
         setFullyBookedDays([]);
@@ -260,7 +240,7 @@ const [showCalendar, setShowCalendar] = useState(false);
         const totalFlexibility = selectedServices.reduce((acc, s) => acc + (s.flexibility || 0), 0);
         const requestedService = { id: 'combo', duration: totalDuration, flexibility: totalFlexibility };
 
-        const mappedCatalog = SERVICES.map(s => ({
+        const mappedCatalog = salonSettings.services.map(s => ({
           id: s.id,
           duration: s.duration,
           flexibility: s.flexibility || 0
@@ -276,9 +256,9 @@ const [showCalendar, setShowCalendar] = useState(false);
           
           let activeHours: TimeRange[] = [];
           if (exception && !exception.isClosed) {
-            activeHours = exception.openingHours?.length ? exception.openingHours : (businessSettings.weeklySchedule[dayOfWeek]?.shifts || []);
-          } else if (businessSettings.weeklySchedule[dayOfWeek]?.isOpen) {
-            activeHours = businessSettings.weeklySchedule[dayOfWeek].shifts;
+            activeHours = exception.openingHours?.length ? exception.openingHours : (salonSettings.weeklySchedule[dayOfWeek]?.shifts || []);
+          } else if (salonSettings.weeklySchedule[dayOfWeek]?.isOpen) {
+            activeHours = salonSettings.weeklySchedule[dayOfWeek].shifts;
           }
 
           const dayStartMs = startOfDay(day).getTime();
@@ -307,7 +287,13 @@ const [showCalendar, setShowCalendar] = useState(false);
             const eM = Math.round((range.end - eH) * 60);
             const shiftEnd = setMinutes(setHours(day, eH), eM);
 
-            const slots = calculateOptimalSlots(requestedService, mappedCatalog, dayApps, { start: shiftStart, end: shiftEnd });
+            const slots = calculateOptimalSlots(
+              requestedService, 
+              mappedCatalog, 
+              dayApps, 
+              { start: shiftStart, end: shiftEnd },
+              salonSettings.yieldConfig // 🚀 Passaggio regole dinamiche
+            );
             
             const validSlots = isSameDay(day, now) ? slots.filter(s => isAfter(s, now)) : slots;
             slotsFound += validSlots.length;
@@ -327,7 +313,7 @@ const [showCalendar, setShowCalendar] = useState(false);
     };
 
     scanVisibleDays();
-  }, [selectedServices, visibleDays, businessSettings, specialDays, tenantId]);
+  }, [selectedServices, visibleDays, salonSettings, specialDays, tenantId]);
   
   const [phonePrefix, setPhonePrefix] = useState('+39');
   const [phoneNumber, setPhoneNumber] = useState('');
@@ -369,9 +355,7 @@ const [showCalendar, setShowCalendar] = useState(false);
     }
   }, [profile]);
 
-  // 🚀 QUERY MULTI-TENANT: I miei appuntamenti
   useEffect(() => {
-    // 🚀 Fix: Assicura che profile.uid sia caricato prima di interrogarlo
     if (!profile?.uid || !tenantId) return;
     const q = query(
       collection(db, 'salons', tenantId, 'appointments'),
@@ -389,7 +373,6 @@ const [showCalendar, setShowCalendar] = useState(false);
     return () => unsubscribe();
   }, [profile, tenantId]);
 
-  // 🚀 QUERY MULTI-TENANT: Proposte di modifica orario
   useEffect(() => {
     if (!profile || !tenantId) return;
     const q = query(
@@ -451,7 +434,7 @@ const [showCalendar, setShowCalendar] = useState(false);
     } else {
       setAvailableSlots([]);
     }
-  }, [selectedDate, selectedServices, businessSettings]);
+  }, [selectedDate, selectedServices, salonSettings?.weeklySchedule]);
 
   useEffect(() => {
     if (selectedAppointmentId) {
@@ -473,7 +456,6 @@ const [showCalendar, setShowCalendar] = useState(false);
     }
   }, [selectedAppointmentId, onAppointmentDialogClose]);
 
-  // 🚀 QUERY MULTI-TENANT: Eccezioni calendario
   useEffect(() => {
     if (!tenantId) return;
     const q = query(collection(db, 'salons', tenantId, 'calendar_exceptions'));
@@ -488,7 +470,7 @@ const [showCalendar, setShowCalendar] = useState(false);
   }, [tenantId]);
 
   const calculateSlots = async () => {
-    if (!tenantId) return;
+    if (!tenantId || !salonSettings?.yieldConfig || !salonSettings?.services || !salonSettings?.weeklySchedule) return;
     setLoading(true);
     const dayStart = startOfDay(selectedDate);
     const dayEnd = endOfDay(selectedDate);
@@ -497,7 +479,7 @@ const [showCalendar, setShowCalendar] = useState(false);
     const dayOfWeek = getDay(selectedDate);
     const exceptionForToday = specialDays.find(ex => ex.date === dateString);
 
-    if (exceptionForToday?.isClosed || (!exceptionForToday && !businessSettings.weeklySchedule[dayOfWeek]?.isOpen)) {
+    if (exceptionForToday?.isClosed || (!exceptionForToday && !salonSettings.weeklySchedule[dayOfWeek]?.isOpen)) {
       setAvailableSlots([]);
       setLoading(false);
       return;
@@ -505,9 +487,9 @@ const [showCalendar, setShowCalendar] = useState(false);
 
     let activeOpeningHours: TimeRange[] = [];
     if (exceptionForToday && !exceptionForToday.isClosed) {
-      activeOpeningHours = exceptionForToday.openingHours?.length ? exceptionForToday.openingHours : (businessSettings.weeklySchedule[dayOfWeek]?.shifts || []);
+      activeOpeningHours = exceptionForToday.openingHours?.length ? exceptionForToday.openingHours : (salonSettings.weeklySchedule[dayOfWeek]?.shifts || []);
     } else {
-      activeOpeningHours = businessSettings.weeklySchedule[dayOfWeek]?.shifts || [];
+      activeOpeningHours = salonSettings.weeklySchedule[dayOfWeek]?.shifts || [];
     }
 
     try {
@@ -531,7 +513,7 @@ const [showCalendar, setShowCalendar] = useState(false);
         };
       });
 
-      const mappedCatalog = SERVICES.map(s => ({
+      const mappedCatalog = salonSettings.services.map(s => ({
         id: s.id,
         duration: s.duration,
         flexibility: s.flexibility || 0 
@@ -561,7 +543,8 @@ const [showCalendar, setShowCalendar] = useState(false);
           requestedService,
           mappedCatalog,
           mappedAppointments,
-          { start: shiftStart, end: shiftEnd }
+          { start: shiftStart, end: shiftEnd },
+          salonSettings.yieldConfig
         );
 
         allValidSlots = [...allValidSlots, ...shiftSlots];
@@ -590,7 +573,7 @@ const [showCalendar, setShowCalendar] = useState(false);
   };
 
   const handleBooking = async (shouldUpdateProfilePhone: boolean = false) => {
-    if (!selectedSlot || selectedServices.length === 0 || !profile || !tenantId) return;
+    if (!selectedSlot || selectedServices.length === 0 || !profile || !tenantId || !salonSettings?.weeklySchedule) return;
 
     const fullPhone = phonePrefix + phoneNumber.replace(/\D/g, '');
     
@@ -652,9 +635,9 @@ const [showCalendar, setShowCalendar] = useState(false);
     
     let activeHours: TimeRange[] = [];
     if (exception && !exception.isClosed) {
-      activeHours = exception.openingHours?.length ? exception.openingHours : (businessSettings.weeklySchedule[dayOfWeek]?.shifts || []);
+      activeHours = exception.openingHours?.length ? exception.openingHours : (salonSettings.weeklySchedule[dayOfWeek]?.shifts || []);
     } else {
-      activeHours = businessSettings.weeklySchedule[dayOfWeek]?.shifts || [];
+      activeHours = salonSettings.weeklySchedule[dayOfWeek]?.shifts || [];
     }
     
     let shiftEnd = dayEnd;
@@ -756,12 +739,12 @@ const [showCalendar, setShowCalendar] = useState(false);
         date: format(selectedSlot, 'dd/MM/yyyy'),
         time: format(selectedSlot, 'HH:mm'),
         services: selectedServices.map(s => s.name).join(', '),
-        tenantId
+        tenantId,
+        targetEmail: salonSettings?.notificationEmail // 🚀 Notifica al proprietario corretto
       });
 
       if (shouldUpdateProfilePhone && newPhoneNumberToUpdate) {
         try {
-          // 🚀 USERS RESTA ALLA RADICE GLOBALE
           await updateDoc(doc(db, 'users', profile.uid), { phoneNumber: newPhoneNumberToUpdate });
         } catch (err) {
           console.warn("Could not update profile phone:", err);
@@ -839,7 +822,8 @@ const [showCalendar, setShowCalendar] = useState(false);
         date: format(appStart, 'dd/MM/yyyy'),
         time: format(appStart, 'HH:mm'),
         services: app.services.map(s => s.name).join(', '),
-        tenantId
+        tenantId,
+        targetEmail: salonSettings?.notificationEmail
       });
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `appointments/${app.id}`);
@@ -949,6 +933,7 @@ const [showCalendar, setShowCalendar] = useState(false);
           date: format(newStartTime, 'dd/MM/yyyy'),
           time: format(newStartTime, 'HH:mm'),
           tenantId: tenantId,
+          targetEmail: salonSettings?.notificationEmail,
           proposalDetails: {
             oldDate: format(myApp.startTime.toDate(), 'dd/MM/yyyy'),
             oldTime: format(myApp.startTime.toDate(), 'HH:mm')
@@ -1036,6 +1021,7 @@ const [showCalendar, setShowCalendar] = useState(false);
             date: format(myApp?.startTime?.toDate() || freshProposal.gapStartTime.toDate(), 'dd/MM/yyyy'),
             time: format(myApp?.startTime?.toDate() || freshProposal.gapStartTime.toDate(), 'HH:mm'),
             tenantId: tenantId,
+            targetEmail: salonSettings?.notificationEmail,
             proposalDetails: {
               oldTime: format(myApp?.startTime?.toDate() || freshProposal.gapStartTime.toDate(), 'HH:mm'),
               proposedTime: format(freshProposal.gapStartTime.toDate(), 'HH:mm')
@@ -1088,13 +1074,13 @@ const [showCalendar, setShowCalendar] = useState(false);
         return false; 
       }
       
-      if (!businessSettings.weeklySchedule[getDay(date)]?.isOpen) return true;
+      if (!salonSettings?.weeklySchedule[getDay(date)]?.isOpen) return true;
       
       if (fullyBookedDays.includes(dateString)) return true;
       
       return false;
     };
-  }, [todayNormalized, maxBookingDate, specialDays, businessSettings, fullyBookedDays]);
+  }, [todayNormalized, maxBookingDate, specialDays, salonSettings, fullyBookedDays]);
 
   const upcomingAppointments = myAppointments
     .filter(a => (a.status === 'booked' || a.status === 'cancelled') && a.startTime.toDate() > new Date())
@@ -1315,7 +1301,7 @@ const [showCalendar, setShowCalendar] = useState(false);
                 Scegli i servizi
               </h2>
               <div className="grid gap-4">
-                {SERVICES.map(service => (
+                {(salonSettings?.services || []).map(service => (
                   <button
                     key={service.id}
                     onClick={() => toggleService(service)}
@@ -1626,7 +1612,7 @@ const [showCalendar, setShowCalendar] = useState(false);
                         </div>
                         <div className="flex-1">
                           <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Telefono</div>
-                          <div className="font-bold text-gray-900">{SALON_INFO.phone}</div>
+                          <div className="font-bold text-gray-900">{salonSettings?.phone}</div>
                         </div>
                         <ChevronDown size={20} className={cn("text-gray-400 transition-transform", showContactMenu && "rotate-180")} />
                       </button>
@@ -1634,14 +1620,14 @@ const [showCalendar, setShowCalendar] = useState(false);
                       {showContactMenu && (
                         <div className="absolute top-full left-0 right-0 mt-2 bg-white rounded-2xl shadow-2xl border border-gray-100 overflow-hidden z-50 animate-in slide-in-from-top-2">
                           <a 
-                            href={`tel:+${SALON_INFO.whatsapp}`}
+                            href={`tel:+${salonSettings?.whatsapp}`}
                             className="flex items-center gap-3 p-4 hover:bg-gray-50 transition-colors border-b border-gray-50"
                           >
                             <Phone size={18} className="text-emerald-600" />
                             <span className="font-bold">Chiama ora</span>
                           </a>
                           <a 
-                            href={`https://wa.me/${SALON_INFO.whatsapp}`}
+                            href={`https://wa.me/${salonSettings?.whatsapp}`}
                             target="_blank"
                             rel="noreferrer"
                             className="flex items-center gap-3 p-4 hover:bg-gray-50 transition-colors"
@@ -1654,7 +1640,7 @@ const [showCalendar, setShowCalendar] = useState(false);
                     </div>
 
                     <a 
-                      href={`mailto:${BARBER_EMAILS[0]}`} 
+                      href={`mailto:${salonSettings?.email}`} 
                       className="flex items-center gap-4 group hover:bg-gray-50 p-3 rounded-2xl transition-all"
                     >
                       <div className="w-12 h-12 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center group-hover:scale-110 transition-transform">
@@ -1662,12 +1648,12 @@ const [showCalendar, setShowCalendar] = useState(false);
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Email</div>
-                        <div className="font-bold text-gray-900 break-all">{BARBER_EMAILS[0]}</div>
+                        <div className="font-bold text-gray-900 break-all">{salonSettings?.email}</div>
                       </div>
                     </a>
 
                     <a 
-                      href={SALON_INFO.instagramUrl} 
+                      href={salonSettings?.instagramUrl} 
                       target="_blank" 
                       rel="noreferrer"
                       className="flex items-center gap-4 group hover:bg-gray-50 p-3 -m-3 rounded-2xl transition-all"
@@ -1677,14 +1663,14 @@ const [showCalendar, setShowCalendar] = useState(false);
                       </div>
                       <div>
                         <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Instagram</div>
-                        <div className="font-bold text-gray-900">{SALON_INFO.instagram}</div>
+                        <div className="font-bold text-gray-900">{salonSettings?.instagram}</div>
                       </div>
                     </a>
                   </div>
 
                   <div className="space-y-6">
                     <a 
-                      href={SALON_INFO.mapsUrl} 
+                      href={salonSettings?.mapsUrl} 
                       target="_blank" 
                       rel="noreferrer"
                       className="flex items-center gap-4 group hover:bg-gray-50 p-3 -m-3 rounded-2xl transition-all"
@@ -1694,7 +1680,7 @@ const [showCalendar, setShowCalendar] = useState(false);
                       </div>
                       <div>
                         <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Indirizzo</div>
-                        <div className="font-bold text-gray-900">{SALON_INFO.address}</div>
+                        <div className="font-bold text-gray-900">{salonSettings?.address}</div>
                         <div className="text-xs text-emerald-600 font-bold mt-1">Apri nel navigatore →</div>
                       </div>
                     </a>
@@ -1711,7 +1697,7 @@ const [showCalendar, setShowCalendar] = useState(false);
                 <div className="flex flex-col gap-2">
                   {[1, 2, 3, 4, 5, 6, 0].map(dayIndex => {
                     const dayNames = ['Domenica', 'Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato'];
-                    const dayData = businessSettings.weeklySchedule?.[dayIndex];
+                    const dayData = salonSettings?.weeklySchedule?.[dayIndex];
 
                     if (!dayData) return null;
 

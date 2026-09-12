@@ -26,7 +26,7 @@ import {
 } from 'firebase/firestore';
 import { auth, db } from './firebase';
 import { UserProfile, UserRole, Notification as AppNotification } from './types';
-import { COUNTRY_CODES } from './constants'; // 🚀 Rimosso BARBER_EMAILS
+import { COUNTRY_CODES } from './constants';
 import BarberDashboard from './components/BarberDashboard';
 import CustomerBooking from './components/CustomerBooking';
 import { LogOut, Scissors, Plus, Clock as ClockIcon, Phone } from 'lucide-react';
@@ -40,25 +40,25 @@ import { useSalonSettings } from './hooks/useSalonSettings';
 export default function App() {
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [authLoading, setAuthLoading] = useState(true);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [selectedProposalId, setSelectedProposalId] = useState<string | null>(null);
   const [selectedAppointmentId, setSelectedAppointmentId] = useState<string | null>(null);
   const [selectedNotificationType, setSelectedNotificationType] = useState<string | null>(null);
   
   const tenantId = getTenantId();
-  console.log("TENANT ID CORRENTE:", tenantId);
-console.log("RUOLO PROFILO:", profile?.role);
-  const { settings: salonSettings } = useSalonSettings(tenantId);
+  
+  // 🚀 Estratto il caricamento delle impostazioni per sincronizzare l'avvio
+  const { settings: salonSettings, loading: settingsLoading } = useSalonSettings(tenantId);
 
   useEffect(() => {
     if (salonSettings?.name) {
-      document.title = `${salonSettings.name}`;
+      document.title = salonSettings.name;
     }
   }, [salonSettings]);
 
-  // 🚀 Nome dinamico del salone basato sul tenant (es: "medo-hair" -> "Medo Hair")
-  const salonName = tenantId.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+  // 🚀 Usa il nome dal database (Single Source of Truth), con fallback sull'URL
+  const salonName = salonSettings?.name || tenantId.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
 
   const [name, setName] = useState('');
   const [phoneNumber, setPhoneNumber] = useState('');
@@ -125,11 +125,8 @@ console.log("RUOLO PROFILO:", profile?.role);
     const unsubscribe = onSnapshot(doc(db, 'users', user.uid), async (docSnap) => {
       if (docSnap.exists()) {
         const userData = docSnap.data() as UserProfile;
-        
-        // 🚀 RBAC DINAMICO: Controlla in tempo reale se l'utente è nello staff del salone
         const staffDoc = await getDoc(doc(db, 'salons', tenantId, 'staff', user.uid));
         userData.role = staffDoc.exists() ? 'barber' : 'customer';
-        
         setProfile(userData);
       }
     });
@@ -168,7 +165,6 @@ console.log("RUOLO PROFILO:", profile?.role);
         const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
         let currentProfile: UserProfile;
 
-        // 🚀 CONTROLLO RUOLO SUL DATABASE DEL SALONE (RBAC)
         const staffDoc = await getDoc(doc(db, 'salons', tenantId, 'staff', firebaseUser.uid));
         const dynamicRole: UserRole = staffDoc.exists() ? 'barber' : 'customer';
 
@@ -183,7 +179,7 @@ console.log("RUOLO PROFILO:", profile?.role);
           await setDoc(doc(db, 'users', firebaseUser.uid), currentProfile);
         } else {
           currentProfile = userDoc.data() as UserProfile;
-          currentProfile.role = dynamicRole; // Sovrascrive il ruolo globale con quello locale
+          currentProfile.role = dynamicRole;
         }
 
         if (currentProfile.role === 'customer') {
@@ -199,7 +195,7 @@ console.log("RUOLO PROFILO:", profile?.role);
           });
         }
       }
-      setLoading(false);
+      setAuthLoading(false);
     });
 
     return () => unsubscribe();
@@ -292,7 +288,8 @@ console.log("RUOLO PROFILO:", profile?.role);
     }
   };
 
-  if (loading) {
+  // 🚀 L'app ora aspetta SIA l'autenticazione SIA il database SaaS prima di mostrare UI
+  if (authLoading || settingsLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-white">
         <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-black"></div>
@@ -301,7 +298,7 @@ console.log("RUOLO PROFILO:", profile?.role);
   }
 
   return (
-    <AuthContext.Provider value={{ user, profile, tenantId, loading, login, logout }}>
+    <AuthContext.Provider value={{ user, profile, tenantId, loading: authLoading, login, logout }}>
       <div className="min-h-screen text-black font-sans relative">
         <div 
           className="fixed inset-0 z-0 opacity-80"

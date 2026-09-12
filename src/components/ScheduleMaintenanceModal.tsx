@@ -7,15 +7,14 @@ import { DayPicker } from 'react-day-picker';
 import ScheduleSettingsModal from './ScheduleSettingsModal';
 import { XCircle, Settings, Calendar as CalendarIcon, Save, Trash2 } from 'lucide-react';
 import { cn } from '../lib/utils';
-import { SpecialDay } from '../types';
-import { useAuth } from '../context/AuthContext'; // 🚀 Aggiunto import del contesto
+import { SpecialDay, Appointment } from '../types'; // 🚀 Aggiunto Appointment per sicurezza TypeScript
+import { useAuth } from '../context/AuthContext';
 
 interface Props {
   onClose: () => void;
 }
 
 export default function ScheduleMaintenanceModal({ onClose }: Props) {
-  // 🚀 Estrazione tenantId
   const { tenantId } = useAuth();
 
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
@@ -44,9 +43,9 @@ export default function ScheduleMaintenanceModal({ onClose }: Props) {
 
   useEffect(() => {
     const fetchException = async () => {
-      if (!tenantId) return; // 🚀 Controllo sicurezza
+      if (!tenantId) return;
       const dateString = format(selectedDate, 'yyyy-MM-dd');
-      // 🚀 Lettura confinata al tenant
+      
       const docRef = doc(db, 'salons', tenantId, 'calendar_exceptions', dateString);
       const docSnap = await getDoc(docRef);
       
@@ -90,7 +89,7 @@ export default function ScheduleMaintenanceModal({ onClose }: Props) {
     try {
       const dayStart = startOfDay(selectedDate);
       const dayEnd = endOfDay(selectedDate);
-      // 🚀 Scudo anti-conflitto confinato al tenant
+      
       const qApps = query(
         collection(db, 'salons', tenantId, 'appointments'),
         where('startTime', '>=', Timestamp.fromDate(dayStart)),
@@ -98,7 +97,8 @@ export default function ScheduleMaintenanceModal({ onClose }: Props) {
         where('status', '==', 'booked')
       );
       const snapApps = await getDocs(qApps);
-      const dayApps = snapApps.docs.map(d => d.data() as any);
+      // 🚀 Tipizzato correttamente per l'intellisense
+      const dayApps = snapApps.docs.map(d => d.data() as Appointment);
 
       if (dayApps.length > 0) {
         if (isClosed) {
@@ -138,7 +138,6 @@ export default function ScheduleMaintenanceModal({ onClose }: Props) {
     };
 
     try {
-      // 🚀 Salvataggio eccezione confinata al tenant
       await setDoc(doc(db, 'salons', tenantId, 'calendar_exceptions', dateString), specialDayData);
       alert('Orario aggiornato con successo!');
       onClose();
@@ -156,7 +155,6 @@ export default function ScheduleMaintenanceModal({ onClose }: Props) {
     setLoading(true);
     const dateString = format(selectedDate, 'yyyy-MM-dd');
     try {
-      // 🚀 Eliminazione eccezione confinata al tenant
       await deleteDoc(doc(db, 'salons', tenantId, 'calendar_exceptions', dateString));
       alert('Orario standard ripristinato!');
       onClose();

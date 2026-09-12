@@ -1,13 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { doc, getDoc, setDoc, Timestamp, collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
-import { DEFAULT_WEEKLY_SCHEDULE } from '../constants';
 import { WeeklySchedule, TimeRange, SpecialDay } from '../types';
 import { XCircle, Check, Calendar, ArrowLeft, Plus, Trash2 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { format, getDay } from 'date-fns';
 import { it } from 'date-fns/locale';
-import { useAuth } from '../context/AuthContext'; // 🚀 Aggiunto import del contesto
+import { useAuth } from '../context/AuthContext';
 
 interface ScheduleSettingsModalProps {
   onClose: () => void;
@@ -24,11 +23,21 @@ const DAYS_OF_WEEK = [
   { id: 0, label: 'Domenica' },
 ];
 
+// 🚀 Generiamo un orario base vuoto se il tenant è nuovo di zecca
+const generateEmptySchedule = (): WeeklySchedule => {
+  const empty: WeeklySchedule = {};
+  for (let i = 0; i <= 6; i++) {
+    empty[i] = { isOpen: false, shifts: [] };
+  }
+  return empty;
+};
+
 export default function ScheduleSettingsModal({ onClose }: ScheduleSettingsModalProps) {
   // 🚀 Estrazione tenantId
   const { tenantId } = useAuth();
 
-  const [schedule, setSchedule] = useState<WeeklySchedule>(DEFAULT_WEEKLY_SCHEDULE);
+  // 🚀 Rimosso import da costanti statiche
+  const [schedule, setSchedule] = useState<WeeklySchedule>(generateEmptySchedule());
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -46,25 +55,13 @@ export default function ScheduleSettingsModal({ onClose }: ScheduleSettingsModal
 
   useEffect(() => {
     const fetchSettings = async () => {
-      if (!tenantId) return; // 🚀 Sicurezza
+      if (!tenantId) return; 
       try {
-        // 🚀 Lettura confinata al tenant
-        const docSnap = await getDoc(doc(db, 'salons', tenantId, 'settings', 'business_hours'));
+        const docSnap = await getDoc(doc(db, 'salons', tenantId, 'settings', 'public'));
         if (docSnap.exists()) {
           const data = docSnap.data();
-          
           if (data.weeklySchedule) {
             setSchedule(data.weeklySchedule);
-          } else if (data.openingHours && data.closedDays) {
-            const migratedSchedule: WeeklySchedule = { ...DEFAULT_WEEKLY_SCHEDULE };
-            for (let i = 0; i <= 6; i++) {
-              const isClosed = data.closedDays.includes(i);
-              migratedSchedule[i] = {
-                isOpen: !isClosed,
-                shifts: !isClosed ? [...data.openingHours] : []
-              };
-            }
-            setSchedule(migratedSchedule);
           }
         }
       } catch (err) {
@@ -77,7 +74,7 @@ export default function ScheduleSettingsModal({ onClose }: ScheduleSettingsModal
   }, [tenantId]);
 
   const handleSave = async () => {
-    if (!tenantId) return; // 🚀 Sicurezza
+    if (!tenantId) return; 
     setSaving(true);
     try {
       // 🚀 SCUDO ANTI-CONFLITTO CONFINATO AL TENANT
@@ -130,8 +127,8 @@ export default function ScheduleSettingsModal({ onClose }: ScheduleSettingsModal
         return;
       }
 
-      // 🚀 Scrittura confinata al tenant
-      await setDoc(doc(db, 'salons', tenantId, 'settings', 'business_hours'), {
+      // 🚀 Salviamo i dati dinamicamente nel documento "public"
+      await setDoc(doc(db, 'salons', tenantId, 'settings', 'public'), {
         weeklySchedule: schedule,
         updatedAt: Timestamp.now()
       }, { merge: true });

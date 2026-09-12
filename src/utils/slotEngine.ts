@@ -1,5 +1,6 @@
 import { addMinutes, isBefore, isAfter, isSameWeek } from 'date-fns';
-import { YIELD_CONFIG } from '../constants';
+import { YieldConfig } from '../types'; // 🚀 Importiamo solo il tipo, addio dati statici
+
 /**
  * ============================================================================
  * MOTORE DI YIELD MANAGEMENT & SCHEDULING (Slot Engine)
@@ -72,7 +73,8 @@ export function calculateOptimalSlots(
   catalog: Service[],
   appointments: AppointmentRange[],
   shift: Shift,
-  isManualBooking: boolean = false // 🚀 NUOVO PARAMETRO GOD MODE
+  yieldConfig: YieldConfig, // 🚀 NUOVO PARAMETRO SAAS: Iniettato dinamicamente dal database
+  isManualBooking: boolean = false 
 ): Date[] {
   const validSlots: Date[] = [];
   
@@ -187,11 +189,12 @@ export function calculateOptimalSlots(
                   const now = new Date();
                   const saturation = D_req / window.length;
                   
-                  const isUrgent = YIELD_CONFIG.URGENCY_CURRENT_WEEK 
+                  // 🚀 Lettura dinamica delle configurazioni del salone
+                  const isUrgent = yieldConfig.URGENCY_CURRENT_WEEK 
                     ? isSameWeek(slotStart, now, { weekStartsOn: 1 })
                     : false;
 
-                  const isHighlySaturated = saturation >= YIELD_CONFIG.MIN_SATURATION_RATE;
+                  const isHighlySaturated = saturation >= yieldConfig.MIN_SATURATION_RATE;
 
                   if (isUrgent && isHighlySaturated) {
                     continue; 

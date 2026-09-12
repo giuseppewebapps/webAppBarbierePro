@@ -6,7 +6,7 @@ import { it } from 'date-fns/locale';
 import { doc, updateDoc, deleteDoc, writeBatch } from 'firebase/firestore';
 import { db } from '../firebase';
 import { cn } from '../lib/utils';
-import { useAuth } from '../context/AuthContext'; // 🚀 Aggiunto import del contesto
+import { useAuth } from '../context/AuthContext';
 
 interface NotificationBellProps {
   notifications: AppNotification[];
@@ -20,7 +20,6 @@ export default function NotificationBell({ notifications, onNotificationClick }:
   const [isOpen, setIsOpen] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
   const prevCountRef = useRef(notifications.length);
   const unreadCount = notifications.filter(n => !n.read).length;
 
@@ -34,10 +33,7 @@ export default function NotificationBell({ notifications, onNotificationClick }:
     if (notifications.length > prevCountRef.current) {
       const newNotif = notifications[0]; 
       
-      if (audioRef.current) {
-        audioRef.current.play().catch(e => console.log('Audio play blocked:', e));
-      }
-
+      // Notifica nativa del sistema operativo (se permessa)
       if ('Notification' in window && Notification.permission === 'granted') {
         const notif = new Notification(newNotif.title, {
           body: newNotif.message,
@@ -115,7 +111,6 @@ export default function NotificationBell({ notifications, onNotificationClick }:
 
   return (
     <div className="relative" ref={dropdownRef}>
-      <audio ref={audioRef} src="https://assets.mixkit.co/active_storage/sfx/2354/2354-preview.mp3" preload="auto" />
       <button
         onClick={() => setIsOpen(!isOpen)}
         className="relative p-2 rounded-full hover:bg-white/10 transition-colors"

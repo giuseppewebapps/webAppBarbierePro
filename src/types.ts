@@ -109,7 +109,13 @@ export interface SpecialDay {
   openingHours?: { start: number; end: number }[]; 
 }
 
-// 🚀 NUOVA INTERFACCIA SAAS: Per tipizzare le informazioni dinamiche del salone
+// 🚀 NUOVO TIPI SaaS: Configurazione dinamica per la saturazione dell'agenda
+export interface YieldConfig {
+  URGENCY_CURRENT_WEEK: boolean;
+  MIN_SATURATION_RATE: number;
+}
+
+// 🚀 AGGIORNATO SaaS: Ora include tutti i dati dinamici iniettati nel database
 export interface SalonPublicSettings {
   name: string;
   phone: string;
@@ -119,4 +125,8 @@ export interface SalonPublicSettings {
   address: string;
   mapsUrl: string;
   email: string;
+  notificationEmail: string; // Email nascosta per Resend
+  services: Service[];       // Array dinamico dei tagli
+  weeklySchedule: WeeklySchedule; // Orari del singolo barbiere
+  yieldConfig: YieldConfig;  // Regole di saturazione isolate per tenant
 }

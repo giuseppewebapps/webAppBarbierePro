@@ -21,7 +21,7 @@ export function useSalonSettings(tenantId: string) {
         if (docSnap.exists()) {
           setSettings(docSnap.data() as SalonPublicSettings);
         } else {
-          // Fallback transitorio se il documento non è ancora stato creato
+          // Fallback robusto SaaS: previene i crash se mancano i campi seeded
           const fallbackName = tenantId.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
           setSettings({
             name: fallbackName,
@@ -31,8 +31,12 @@ export function useSalonSettings(tenantId: string) {
             instagramUrl: '',
             address: '',
             mapsUrl: '',
-            email: ''
-          });
+            email: '',
+            notificationEmail: '',
+            services: [], // Previene il crash del .map() nel frontend
+            weeklySchedule: {},
+            yieldConfig: { URGENCY_CURRENT_WEEK: true, MIN_SATURATION_RATE: 0.75 }
+          } as unknown as SalonPublicSettings); 
         }
         setLoading(false);
       },

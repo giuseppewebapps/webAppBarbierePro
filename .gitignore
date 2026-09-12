@@ -10,3 +10,5 @@ coverage/
 .vscode/launch.json
 agenda.ics
 migrations/
+service-account.json
+seed-demo.cjs

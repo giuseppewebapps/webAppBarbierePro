@@ -11,9 +11,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const { type, customerName, date, time, services, proposalDetails, targetEmail, tenantId } = req.body;
 
-  // 🚀 Fallback SaaS: Se il frontend non passa l'email specifica del barbiere, usiamo quella di sistema globale configurata su Vercel
-  const recipient = targetEmail || process.env.SYSTEM_EMAIL || 'notifiche.medohs@gmail.com';
+
+  const recipient = targetEmail || process.env.SYSTEM_EMAIL;
   
+  if (!recipient) {
+    console.error(`[SaaS Error] Nessuna email destinatario fornita per il tenant: ${tenantId}`);
+    return res.status(400).json({ error: 'Email del salone non configurata' });
+  }
+
   // 🚀 Formattiamo il nome del salone per l'oggetto della mail
   const salonName = tenantId ? tenantId.toUpperCase() : 'SALONE';
 
