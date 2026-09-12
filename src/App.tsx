@@ -38,7 +38,7 @@ import { AuthContext } from './context/AuthContext';
 import { useSalonSettings } from './hooks/useSalonSettings';
 
 // 🔴 KILL SWITCH: Metti a true per bloccare l'app, rimetti a false a fine migrazione
-const MAINTENANCE_MODE = false;
+const MAINTENANCE_MODE = true;
 export default function App() {
 
 // 1. Blocco di Manutenzione Invalicabile
