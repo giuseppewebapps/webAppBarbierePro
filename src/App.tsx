@@ -37,7 +37,23 @@ import { getTenantId } from './utils/tenantResolver';
 import { AuthContext } from './context/AuthContext';
 import { useSalonSettings } from './hooks/useSalonSettings';
 
+// 🔴 KILL SWITCH: Metti a true per bloccare l'app, rimetti a false a fine migrazione
+const MAINTENANCE_MODE = true;
 export default function App() {
+
+// 1. Blocco di Manutenzione Invalicabile
+  if (MAINTENANCE_MODE) {
+    return (
+      <div className="min-h-screen bg-black text-white flex flex-col items-center justify-center p-6 text-center font-sans">
+        <div className="text-6xl mb-6 animate-pulse">💈</div>
+        <h1 className="text-3xl font-extrabold mb-4 tracking-tight">Stiamo aggiornando il sistema</h1>
+        <p className="text-gray-400 max-w-md text-base leading-relaxed">
+          Stiamo installando la nuova architettura SaaS della piattaforma per offrirti un'esperienza ancora più veloce e sicura. Torneremo online tra pochissimo.
+        </p>
+      </div>
+    );
+  }
+
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
