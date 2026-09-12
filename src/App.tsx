@@ -93,7 +93,7 @@ console.log("RUOLO PROFILO:", profile?.role);
   };
 
   useEffect(() => {
-    if (!user || !tenantId) { 
+    if (!user?.uid || !tenantId) { 
       setNotifications([]);
       return; 
     }
@@ -228,6 +228,9 @@ console.log("RUOLO PROFILO:", profile?.role);
         }
         
         await setDoc(doc(db, 'users', userCredential.user.uid), { 
+          uid: userCredential.user.uid,
+          email: email,
+          role: 'customer',
           displayName: name.trim() !== '' ? name : 'Nuovo Cliente',
           phoneNumber: phoneNumber.trim() !== '' ? phoneNumber : ''
         }, { merge: true });

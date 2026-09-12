@@ -371,7 +371,8 @@ const [showCalendar, setShowCalendar] = useState(false);
 
   // 🚀 QUERY MULTI-TENANT: I miei appuntamenti
   useEffect(() => {
-    if (!profile || !tenantId) return;
+    // 🚀 Fix: Assicura che profile.uid sia caricato prima di interrogarlo
+    if (!profile?.uid || !tenantId) return;
     const q = query(
       collection(db, 'salons', tenantId, 'appointments'),
       where('customerId', '==', profile.uid)
