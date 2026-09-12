@@ -183,6 +183,8 @@ export default function CustomerBooking({
     weeklySchedule: DEFAULT_WEEKLY_SCHEDULE
   });
 
+const [showCalendar, setShowCalendar] = useState(false);
+
   // 🚀 QUERY MULTI-TENANT: Impostazioni Orari
   useEffect(() => {
     if (!tenantId) return;

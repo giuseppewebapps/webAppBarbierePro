@@ -47,6 +47,8 @@ export default function App() {
   const [selectedNotificationType, setSelectedNotificationType] = useState<string | null>(null);
   
   const tenantId = getTenantId();
+  console.log("TENANT ID CORRENTE:", tenantId);
+console.log("RUOLO PROFILO:", profile?.role);
   const { settings: salonSettings } = useSalonSettings(tenantId);
 
   useEffect(() => {
@@ -161,6 +163,7 @@ export default function App() {
 
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       setUser(firebaseUser);
+
       if (firebaseUser) {
         const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
         let currentProfile: UserProfile;
@@ -376,6 +379,7 @@ export default function App() {
                   />
                   <input
                     type="password"
+                    autoComplete="current-password"
                     placeholder="Password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}

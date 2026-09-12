@@ -3,7 +3,7 @@ export function getTenantId(): string {
 
   // 1. Ambiente di Sviluppo (Localhost)
   if (hostname === 'localhost' || hostname === '127.0.0.1') {
-    return 'dev-salon'; 
+    return 'demo'; 
   }
 
   // 2. Ambiente di Produzione (Vercel Wildcard)
