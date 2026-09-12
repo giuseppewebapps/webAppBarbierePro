@@ -48,7 +48,7 @@ export default function App() {
         <div className="text-6xl mb-6 animate-pulse">💈</div>
         <h1 className="text-3xl font-extrabold mb-4 tracking-tight">Stiamo aggiornando il sistema</h1>
         <p className="text-gray-400 max-w-md text-base leading-relaxed">
-          Stiamo installando la nuova architettura SaaS della piattaforma per offrirti un'esperienza ancora più veloce e sicura. Torneremo online tra pochissimo.
+          Stiamo installando una nuova versione della piattaforma per offrirti un'esperienza di prenotazione ancora più veloce e sicura. Torneremo online tra pochissimo.
         </p>
       </div>
     );
