@@ -1,8 +1,8 @@
 {
   "rewrites": [
     {
-      "source": "/(.*)",
-      "destination": "/index.html"
+      "source": "/((?!maintenance\\.html).*)",
+      "destination": "/maintenance.html"
     }
   ],
   "headers": [
