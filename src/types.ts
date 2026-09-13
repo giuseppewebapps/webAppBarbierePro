@@ -11,6 +11,18 @@ export interface UserProfile {
   createdAt?: Timestamp;
 }
 
+// 🚀 NUOVO SaaS: Profilo Dipendente/Owner (Localizzato per Tenant)
+export interface StaffProfile {
+  uid: string;
+  displayName: string;
+  role: 'owner' | 'barber'; // 'owner' per l'admin, 'barber' per i collaboratori
+  active: boolean;          // Soft-delete: se false non riceve più appuntamenti
+  order: number;            // Priorità di riempimento (1 = alta priorità per dipendenti, 99 = boss)
+  color: string;            // Colore hex (es. #3B82F6) per la UI del calendario
+  assignedServices: string[]; // Array di ID dei servizi che sa eseguire
+  avatarUrl?: string;
+}
+
 export interface Service {
   id: string;
   name: string;
@@ -23,6 +35,8 @@ export interface Service {
 export interface Appointment {
   id?: string;
   customerId: string;
+  staffId?: string;         // 🚀 NUOVO: ID del barbiere assegnato (Opzionale per retrocompatibilità base)
+  isStaffRandom?: boolean;  // 🚀 NUOVO: true se il cliente ha scelto "Qualsiasi operatore"
   services: Service[];
   startTime: any; // Timestamp
   endTime: any; // Timestamp
@@ -51,7 +65,6 @@ export interface Notification {
   userId: string;
   title: string;
   message: string;
-  // 🚀 Aggiunto 'proposal_declined' necessario per le notifiche al barbiere
   type: 'cancellation' | 'booking' | 'reschedule_proposal' | 'manual_management_required' | 'proposal_declined';
   read: boolean;
   createdAt: any;
@@ -67,7 +80,7 @@ export interface RescheduleProposal {
   targets: {
     userId: string;
     appointmentId: string;
-    status: 'pending' | 'accepted' | 'declined' | 'expired' | 'waiting'; // Mantenuto 'waiting'
+    status: 'pending' | 'accepted' | 'declined' | 'expired' | 'waiting';
     notifiedAt?: any;
     expiresAt?: any;
     proposedStartTime: any;
@@ -89,7 +102,6 @@ export interface TimeRange {
   end: number;   // es. 13.75 per le 13:45
 }
 
-// 🚀 STRUTTURA ORARIO GRANULARE GIORNALIERO
 export interface DaySchedule {
   isOpen: boolean;
   shifts: TimeRange[];
@@ -109,13 +121,12 @@ export interface SpecialDay {
   openingHours?: { start: number; end: number }[]; 
 }
 
-// 🚀 NUOVO TIPI SaaS: Configurazione dinamica per la saturazione dell'agenda
 export interface YieldConfig {
   URGENCY_CURRENT_WEEK: boolean;
   MIN_SATURATION_RATE: number;
 }
 
-// 🚀 AGGIORNATO SaaS: Ora include tutti i dati dinamici iniettati nel database
+// 🚀 AGGIORNATO SaaS: Master Settings del Tenant
 export interface SalonPublicSettings {
   name: string;
   phone: string;
@@ -125,8 +136,11 @@ export interface SalonPublicSettings {
   address: string;
   mapsUrl: string;
   email: string;
-  notificationEmail: string; // Email nascosta per Resend
-  services: Service[];       // Array dinamico dei tagli
-  weeklySchedule: WeeklySchedule; // Orari del singolo barbiere
-  yieldConfig: YieldConfig;  // Regole di saturazione isolate per tenant
+  notificationEmail: string; 
+  logoUrl?: string;          // Aggiunto per le UI personalizzate
+  isActive?: boolean;        // 🚀 KILL SWITCH ABBONAMENTI: Blocca il tenant se false
+  hasMultiStaff: boolean;    // 🚀 FEATURE FLAG: Attiva UI e logiche multi-postazione
+  services: Service[];       
+  weeklySchedule: WeeklySchedule; 
+  yieldConfig: YieldConfig;  
 }
