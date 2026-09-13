@@ -59,11 +59,24 @@ service cloud.firestore {
       match /appointments/{appointmentId} {
         allow read: if isAuthenticated(); 
         allow create: if isAuthenticated() && isValidAppointment(request.resource.data);
-        allow update: if isAuthenticated() && (
-          isSalonStaff() || 
-          (resource.data.customerId == request.auth.uid && resource.data.status == 'booked' && isValidAppointment(request.resource.data)) ||
-          (resource.data.customerId == 'manual_entry' && request.resource.data.customerId == request.auth.uid)
-        );
+       allow update: if isAuthenticated() && (
+        isSalonStaff() ||
+        (resource.data.customerId == request.auth.uid && 
+          request.resource.data.customerId == request.auth.uid &&
+          // Autorizza modifiche SOLO a stato e orari. Soldi e servizi restano intoccabili.
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'startTime', 'endTime', 'updatedAt'])
+           ) ||
+        //Gestione caso di autolinker 
+        (resource.data.customerId == request.auth.uid && resource.data.status == 'booked' && isValidAppointment(request.resource.data)) ||
+        (resource.data.customerId != request.auth.uid &&
+          request.resource.data.customerId == request.auth.uid &&
+          (
+            (resource.data.customer.email != null && resource.data.customer.email == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.email) ||
+            (resource.data.customer.phoneNumber != null && resource.data.customer.phoneNumber == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.phoneNumber)
+          ) &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['customerId', 'customer', 'isManual'])
+        )
+      );
         allow delete: if isSalonStaff() || (isAuthenticated() && resource.data.status == 'cancelled') || (isAuthenticated() && resource.data.customerId == request.auth.uid);
       }
 
