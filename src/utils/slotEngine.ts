@@ -1,5 +1,5 @@
 import { addMinutes, isBefore, isAfter, isSameWeek } from 'date-fns';
-import { YieldConfig } from '../types'; // 🚀 Importiamo solo il tipo, addio dati statici
+import { YieldConfig, StaffProfile, Service as AppService } from '../types';
 
 /**
  * ============================================================================
@@ -10,7 +10,7 @@ import { YieldConfig } from '../types'; // 🚀 Importiamo solo il tipo, addio d
  * bilanciando la massima saturazione dell'agenda (profitti) con la sostenibilità 
  * del carico di lavoro del salone.
  * 
- * LE 6 REGOLE ARCHITETTURALI:
+ * LE 7 REGOLE ARCHITETTURALI:
  * 
  * 1. CLAMPING (Isolamento Turni)
  *    Gli appuntamenti vengono "tagliati" ai bordi del turno che si sta calcolando. 
@@ -48,6 +48,16 @@ import { YieldConfig } from '../types'; // 🚀 Importiamo solo il tipo, addio d
  *    B) Saturazione: Il servizio richiesto copre un'alta percentuale dello spazio 
  *       disponibile (es. >= 75%). 
  *    Questo garantisce agende blindate sul lungo periodo, ma flessibili a ridosso della scadenza.
+ * 
+ * 7. AGGREGAZIONE MULTI-POSTAZIONE (Concorrenza & Load Balancing)
+ *    Se l'utente non seleziona un barbiere specifico, l'engine scala su una matrice n-dimensionale:
+ *    - Skill Matching: Filtra a monte i barbieri che non sanno eseguire i servizi richiesti.
+ *    - Priority Fill: Ordina i barbieri idonei per priorità (es. Apprendista prima del Boss) 
+ *      per ottimizzare la saturazione del team e liberare i senior.
+ *    - Legacy Fallback: Protezione retroattiva. Se un appuntamento storico non ha 'staffId', 
+ *      viene considerato un blocco globale e disabilita tutti i barbieri per quella frazione.
+ *    - Short-Circuiting: Restituisce un singolo slot univoco alla UI appena trova il primo 
+ *      barbiere libero, evitando di renderizzare slot duplicati al cliente.
  * ============================================================================
  */
 
@@ -73,7 +83,7 @@ export function calculateOptimalSlots(
   catalog: Service[],
   appointments: AppointmentRange[],
   shift: Shift,
-  yieldConfig: YieldConfig, // 🚀 NUOVO PARAMETRO SAAS: Iniettato dinamicamente dal database
+  yieldConfig: YieldConfig, 
   isManualBooking: boolean = false 
 ): Date[] {
   const validSlots: Date[] = [];
@@ -139,7 +149,6 @@ export function calculateOptimalSlots(
       for (const dur of durationsToTry) {
         if (isAfter(addMinutes(slotStart, dur), windowEnd)) continue;
 
-        // 🚀 GOD MODE BARBIERE: Se inserimento manuale, scavalca tutte le logiche di marketing
         if (isManualBooking) {
           approved_D_eff = dur;
           break;
@@ -149,7 +158,6 @@ export function calculateOptimalSlots(
         const L_rem_before = (slotStart.getTime() - window.start.getTime()) / 60000;
         const L_rem_after = (window.end.getTime() - slotEnd.getTime()) / 60000;
 
-        // LA REGOLA ANTI-BURNOUT
         const isCompressing = dur < D_req;
         if (isCompressing) {
           const touchesPrev = slotStart.getTime() === window.start.getTime();
@@ -160,23 +168,19 @@ export function calculateOptimalSlots(
           }
         }
 
-       // FILTRO ANTI-BUCO DINAMICO
         const minGapAllowed = window.length > 120 ? 30 : M_min;
 
         if ((L_rem_before > 0 && L_rem_before < minGapAllowed) || (L_rem_after > 0 && L_rem_after < minGapAllowed)) {
           continue; 
         }
 
-        // Regola Micro-Servizi
         if (D_req < 30) {
           const isAtShiftStart = slotStart.getTime() === shift.start.getTime();
           const isAtShiftEnd = slotEnd.getTime() === shift.end.getTime();
           if (!isAtShiftStart && !isAtShiftEnd) continue;
         } else {
-          // Regola Scudo
           let shieldActivated = false;
           
-          // 🚀 REGOLA OVERRIDE: Se il servizio richiesto dura PIÙ di 30 minuti, lo Scudo NON interviene
           if (D_req <= 30) {
             for (const s_higher of catalog) {
               const D_min_higher = s_higher.duration - s_higher.flexibility;
@@ -185,11 +189,9 @@ export function calculateOptimalSlots(
                 const destroysAfter = L_rem_after > 0 && L_rem_after < D_min_higher;
                 
                 if (destroysBefore || destroysAfter) {
-                  // IBRIDO: Settimana in Corso + Soglia di Saturazione
                   const now = new Date();
                   const saturation = D_req / window.length;
                   
-                  // 🚀 Lettura dinamica delle configurazioni del salone
                   const isUrgent = yieldConfig.URGENCY_CURRENT_WEEK 
                     ? isSameWeek(slotStart, now, { weekStartsOn: 1 })
                     : false;
@@ -224,4 +226,87 @@ export function calculateOptimalSlots(
 
   const uniqueSlots = Array.from(new Set(validSlots.map(d => d.getTime()))).map(t => new Date(t));
   return uniqueSlots.sort((a, b) => a.getTime() - b.getTime());
+}
+
+/**
+ * ============================================================================
+ * AGGREGATORE MULTI-POSTAZIONE E PRIORITÀ
+ * ============================================================================
+ */
+export function calculateMultiStaffSlots(
+  requestedServices: AppService[],
+  catalog: AppService[],
+  rawAppointments: any[], 
+  staffMembers: StaffProfile[],
+  selectedStaffId: string | null,
+  shift: Shift,
+  yieldConfig: YieldConfig,
+  isManualBooking: boolean = false
+): Date[] {
+  const D_req = requestedServices.reduce((acc, s) => acc + s.duration, 0);
+  const flex_req = requestedServices.reduce((acc, s) => acc + (s.flexibility || 0), 0);
+  const requestedCombo = { id: 'combo', duration: D_req, flexibility: flex_req };
+
+  // 🚀 FALLBACK MONO-POSTAZIONE (Retrocompatibilità Antiproiettile)
+  // Se il salone non ha lo staff attivo o non ha dipendenti, calcola per il salone intero.
+  if (!staffMembers || staffMembers.length === 0) {
+    const legacyAppointments = rawAppointments.map(app => {
+      const actualDuration = (app.endTime.toDate().getTime() - app.startTime.toDate().getTime()) / 60000;
+      const nominalDuration = (app.services || []).reduce((acc: number, s: any) => acc + s.duration, 0);
+      return {
+        start: app.startTime.toDate(),
+        end: app.endTime.toDate(),
+        isCompressed: actualDuration < nominalDuration
+      };
+    });
+    return calculateOptimalSlots(requestedCombo, catalog, legacyAppointments, shift, yieldConfig, isManualBooking);
+  }
+
+  // --- INIZIO LOGICA MULTI-POSTAZIONE ---
+  let eligibleStaff = staffMembers.filter(staff => staff.active);
+
+  if (selectedStaffId) {
+    eligibleStaff = eligibleStaff.filter(s => s.uid === selectedStaffId);
+  } else {
+    const requestedIds = requestedServices.map(s => s.id);
+    eligibleStaff = eligibleStaff.filter(staff => 
+      requestedIds.every(id => staff.assignedServices.includes(id))
+    );
+  }
+
+  eligibleStaff.sort((a, b) => a.order - b.order);
+
+  const allAvailableSlots = new Map<number, Date>();
+
+  for (const staff of eligibleStaff) {
+    const staffAppointments = rawAppointments.filter(app => 
+      app.staffId === staff.uid || !app.staffId
+    ).map(app => {
+      const actualDuration = (app.endTime.toDate().getTime() - app.startTime.toDate().getTime()) / 60000;
+      const nominalDuration = (app.services || []).reduce((acc: number, s: any) => acc + s.duration, 0);
+      return {
+        start: app.startTime.toDate(),
+        end: app.endTime.toDate(),
+        isCompressed: actualDuration < nominalDuration
+      };
+    });
+
+    const staffSlots = calculateOptimalSlots(
+      requestedCombo,
+      catalog,
+      staffAppointments,
+      shift,
+      yieldConfig,
+      isManualBooking
+    );
+
+    for (const slot of staffSlots) {
+      const timeKey = slot.getTime();
+      if (!allAvailableSlots.has(timeKey)) {
+        allAvailableSlots.set(timeKey, slot);
+      }
+    }
+  }
+
+  return Array.from(allAvailableSlots.values()).sort((a, b) => a.getTime() - b.getTime());
 }
