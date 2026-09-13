@@ -37,23 +37,13 @@ import { getTenantId } from './utils/tenantResolver';
 import { AuthContext } from './context/AuthContext';
 import { useSalonSettings } from './hooks/useSalonSettings';
 
-// 🔴 KILL SWITCH: Metti a true per bloccare l'app, rimetti a false a fine migrazione
+// 🔴 KILL SWITCH MANUTENZIONE: Metti a true per bloccare temporaneamente l'app per aggiornamenti
 const MAINTENANCE_MODE = false;
+
 export default function App() {
-
-// 1. Blocco di Manutenzione Invalicabile
-  if (MAINTENANCE_MODE) {
-    return (
-      <div className="min-h-screen bg-black text-white flex flex-col items-center justify-center p-6 text-center font-sans">
-        <div className="text-6xl mb-6 animate-pulse">💈</div>
-        <h1 className="text-3xl font-extrabold mb-4 tracking-tight">Stiamo aggiornando il sistema</h1>
-        <p className="text-gray-400 max-w-md text-base leading-relaxed">
-          Stiamo installando una nuova versione della piattaforma per offrirti un'esperienza di prenotazione ancora più veloce e sicura. Torneremo online tra pochissimo.
-        </p>
-      </div>
-    );
-  }
-
+  // ==========================================
+  // 1. DICHIARAZIONE DI TUTTI GLI HOOK (STATE E CUSTOM HOOKS)
+  // ==========================================
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -64,17 +54,8 @@ export default function App() {
   
   const tenantId = getTenantId();
   
-  // 🚀 Estratto il caricamento delle impostazioni per sincronizzare l'avvio
+  // Custom Hook per impostazioni salone
   const { settings: salonSettings, loading: settingsLoading } = useSalonSettings(tenantId);
-
-  useEffect(() => {
-    if (salonSettings?.name) {
-      document.title = salonSettings.name;
-    }
-  }, [salonSettings]);
-
-  // 🚀 Usa il nome dal database (Single Source of Truth), con fallback sull'URL
-  const salonName = salonSettings?.name || tenantId.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
 
   const [name, setName] = useState('');
   const [phoneNumber, setPhoneNumber] = useState('');
@@ -89,25 +70,18 @@ export default function App() {
   const [phonePrefix, setTempPhonePrefix] = useState('+39');
   const [savingPhone, setSavingPhone] = useState(false);
 
-  const handlePasswordReset = async () => {
-    setAuthError('');
-    setResetMessage('');
-    if (!email) {
-      setAuthError('Inserisci la tua email nel campo qui sopra per recuperare la password.');
-      return;
-    }
-    try {
-      auth.languageCode = 'it';
-      await sendPasswordResetEmail(auth, email);
-      setResetMessage('Ti abbiamo inviato un\'email con le istruzioni per ripristinare la password.');
-    } catch (error: any) {
-      console.error('Password reset error:', error);
-      if (error.code === 'auth/invalid-email') setAuthError('Formato email non valido.');
-      else if (error.code === 'auth/user-not-found') setAuthError('Nessun account nativo trovato con questa email.');
-      else setAuthError("Errore durante l'invio dell'email di recupero. Riprova.");
-    }
-  };
+  // ==========================================
+  // 2. DICHIARAZIONE DI TUTTI GLI USEEFFECT
+  // ==========================================
 
+  // Aggiornamento Document Title
+  useEffect(() => {
+    if (salonSettings?.name) {
+      document.title = salonSettings.name;
+    }
+  }, [salonSettings]);
+
+  // Listener Notifiche in tempo reale
   useEffect(() => {
     if (!user?.uid || !tenantId) { 
       setNotifications([]);
@@ -133,6 +107,7 @@ export default function App() {
     return () => unsubscribe();
   }, [user, tenantId]);
 
+  // Listener Profilo Utente & Controllo Staff Dinamico
   useEffect(() => {
     if (!user) {
       setProfile(null);
@@ -149,6 +124,7 @@ export default function App() {
     return () => unsubscribe();
   }, [user, tenantId]);
 
+  // Controllo Modalità Telefono Obbligatorio
   useEffect(() => {
     if (user && profile) {
       const phone = typeof profile.phoneNumber === 'string' ? profile.phoneNumber.trim() : '';
@@ -162,6 +138,7 @@ export default function App() {
     }
   }, [user, profile]);
 
+  // Inizializzazione Auth & Auto-Link
   useEffect(() => {
     const testConnection = async () => {
       try {
@@ -216,6 +193,30 @@ export default function App() {
 
     return () => unsubscribe();
   }, [tenantId]);
+
+  // ==========================================
+  // 3. FUNZIONI HELPER
+  // ==========================================
+  const salonName = salonSettings?.name || tenantId.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+
+  const handlePasswordReset = async () => {
+    setAuthError('');
+    setResetMessage('');
+    if (!email) {
+      setAuthError('Inserisci la tua email nel campo qui sopra per recuperare la password.');
+      return;
+    }
+    try {
+      auth.languageCode = 'it';
+      await sendPasswordResetEmail(auth, email);
+      setResetMessage('Ti abbiamo inviato un\'email con le istruzioni per ripristinare la password.');
+    } catch (error: any) {
+      console.error('Password reset error:', error);
+      if (error.code === 'auth/invalid-email') setAuthError('Formato email non valido.');
+      else if (error.code === 'auth/user-not-found') setAuthError('Nessun account nativo trovato con questa email.');
+      else setAuthError("Errore durante l'invio dell'email di recupero. Riprova.");
+    }
+  };
 
   const login = async () => {
     const provider = new GoogleAuthProvider();
@@ -304,7 +305,24 @@ export default function App() {
     }
   };
 
-  // 🚀 L'app ora aspetta SIA l'autenticazione SIA il database SaaS prima di mostrare UI
+  // ==========================================
+  // 4. RENDERING CONDIZIONALE (TUTTI GLI HOOK SONO GIÀ STATI ESEGUITI)
+  // ==========================================
+
+  // A. Blocco Manutenzione Globale
+  if (MAINTENANCE_MODE) {
+    return (
+      <div className="min-h-screen bg-black text-white flex flex-col items-center justify-center p-6 text-center font-sans">
+        <div className="text-6xl mb-6 animate-pulse">💈</div>
+        <h1 className="text-3xl font-extrabold mb-4 tracking-tight">Stiamo aggiornando il sistema</h1>
+        <p className="text-gray-400 max-w-md text-base leading-relaxed">
+          Stiamo installando una nuova versione della piattaforma per offrirti un'esperienza di prenotazione ancora più veloce e sicura. Torneremo online tra pochissimo.
+        </p>
+      </div>
+    );
+  }
+
+  // B. Loading generale (Auth + Firestore Settings)
   if (authLoading || settingsLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-white">
@@ -313,6 +331,22 @@ export default function App() {
     );
   }
 
+  // C. 🔒 KILL SWITCH (Servizio Sospeso per Mancato Pagamento Abbonamento)
+  if (salonSettings && salonSettings.isActive === false) {
+    return (
+      <div className="min-h-screen bg-black text-white flex flex-col items-center justify-center p-6 text-center font-sans">
+        <div className="text-5xl mb-4">🔒</div>
+        <h1 className="text-2xl font-bold mb-2 tracking-tight">Servizio Sospeso</h1>
+        <p className="text-gray-400 max-w-sm text-sm leading-relaxed">
+          Il sistema di prenotazione per questo salone è momentaneamente disabilitato.
+        </p>
+      </div>
+    );
+  }
+
+  // ==========================================
+  // 5. RENDER PRINCIPALE
+  // ==========================================
   return (
     <AuthContext.Provider value={{ user, profile, tenantId, loading: authLoading, login, logout }}>
       <div className="min-h-screen text-black font-sans relative">
@@ -454,17 +488,17 @@ export default function App() {
               <header className="bg-black/80 backdrop-blur-md text-white sticky top-0 z-[100] shadow-xl border-b border-white/10">
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
                   <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 bg-white/10 rounded-xl flex items-center justify-center overflow-hidden">
-                        {salonSettings?.logoUrl ? (
-                          <img
-                            src={salonSettings.logoUrl}
-                            alt={salonSettings.name || 'Logo Salone'}
-                            className="w-full h-full object-cover"
-                          />
-                        ) : (
-                          <Scissors size={24} className="text-white" />
-                        )}
-                      </div>
+                    <div className="w-10 h-10 bg-white/10 rounded-xl flex items-center justify-center overflow-hidden">
+                      {salonSettings?.logoUrl ? (
+                        <img
+                          src={salonSettings.logoUrl}
+                          alt={salonSettings.name || 'Logo Salone'}
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <Scissors size={24} className="text-white" />
+                      )}
+                    </div>
                     <div>
                       <h1 className="text-lg font-bold tracking-tight">{salonName}</h1>
                       <p className="text-[10px] text-gray-400 uppercase tracking-widest">
