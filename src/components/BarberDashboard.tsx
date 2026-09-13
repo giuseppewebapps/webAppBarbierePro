@@ -16,7 +16,7 @@ import {
   limit
 } from 'firebase/firestore';
 import { db, auth } from '../firebase';
-import { Appointment, UserProfile, RescheduleProposal, TimeRange, Notification as AppNotification, WeeklySchedule } from '../types';
+import { Appointment, UserProfile, RescheduleProposal, TimeRange, Notification as AppNotification, WeeklySchedule, SpecialDay } from '../types';
 import { 
   format, 
   startOfDay, 
@@ -52,7 +52,6 @@ import {
   Send,
   CheckCircle2,
   Globe,
-  ArrowLeft,
   Check,
   Plus,
   User,
@@ -65,9 +64,8 @@ import { useAuth } from '../context/AuthContext';
 import { useSalonSettings } from '../hooks/useSalonSettings';
 import { WhatsAppButton } from './WhatsAppButton';
 import { generateWhatsAppLink } from '../utils/whatsapp';
-import { COUNTRY_CODES } from '../constants'; // Manteniamo solo i dati globali
+import { COUNTRY_CODES } from '../constants';
 import { cn } from '../lib/utils';
-import { SpecialDay } from '../types';
 import ScheduleMaintenanceModal from './ScheduleMaintenanceModal';
 import { calculateOptimalSlots } from '../utils/slotEngine';
 
@@ -81,26 +79,7 @@ enum OperationType {
 }
 
 function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
-  const errInfo = {
-    error: error instanceof Error ? error.message : String(error),
-    operationType,
-    path,
-    authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-      tenantId: auth.currentUser?.tenantId,
-      providerInfo: auth.currentUser?.providerData.map(provider => ({
-        providerId: provider.providerId,
-        displayName: provider.displayName,
-        email: provider.email,
-        photoUrl: provider.photoURL
-      })) || []
-    }
-  };
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
+  console.error('Firestore Error: ', error);
 }
 
 interface BarberDashboardProps {
@@ -110,11 +89,12 @@ interface BarberDashboardProps {
 }
 
 export default function BarberDashboard({ selectedAppointmentId, selectedNotificationType, onAppointmentDialogClose }: BarberDashboardProps) {
-  // 🚀 ESTRAZIONE TENANT ID E SETTINGS SAAS DAL CONTESTO
   const { profile, tenantId } = useAuth();
   const { settings: salonSettings } = useSalonSettings(tenantId);
   
   const [appointments, setAppointments] = useState<(Appointment & { customer?: UserProfile })[]>([]);
+  // 🚀 STATO PER LA RUBRICA LOCALE (Local Aliasing)
+  const [localContacts, setLocalContacts] = useState<Record<string, any>>({});
   const [loading, setLoading] = useState(true);
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [selectedAppointment, setSelectedAppointment] = useState<(Appointment & { customer?: UserProfile }) | null>(null);
@@ -140,8 +120,42 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
   const [isEditingCustomer, setIsEditingCustomer] = useState(false);
   const [editCustomerForm, setEditCustomerForm] = useState({ firstName: '', lastName: '', phone: '', email: '' });
   const [savingCustomer, setSavingCustomer] = useState(false);
+  const [sendingProposal, setSendingProposal] = useState(false);
+  const [shiftConfirm, setShiftConfirm] = useState<{app: Appointment & { customer?: UserProfile }, direction: 'anticipo' | 'posticipo'} | null>(null);
+  const [currentTime, setCurrentTime] = useState(new Date());
 
-  // 🚀 QUERY MULTI-TENANT
+  // 🚀 LISTENER RUBRICA LOCALE (Per tradurre i nomi strani)
+  useEffect(() => {
+    if (!tenantId) return;
+    const unsubscribe = onSnapshot(collection(db, 'salons', tenantId, 'contacts'), (snapshot) => {
+      const map: Record<string, any> = {};
+      snapshot.docs.forEach(doc => {
+        map[doc.id] = doc.data(); // doc.id è il numero pulito (es. 3331234567)
+      });
+      setLocalContacts(map);
+    });
+    return () => unsubscribe();
+  }, [tenantId]);
+
+  // 🚀 IL MOTORE DI TRADUZIONE NOMI
+  const getDisplayName = (app: Appointment & { customer?: UserProfile }) => {
+    if (app.isForFriend) {
+      return `${app.friendDetails?.firstName || ''} ${app.friendDetails?.lastName || ''}`.trim() || 'Amico';
+    }
+    
+    // Estrai il numero pulito per cercare in rubrica
+    const rawPhone = app.customer?.phoneNumber?.replace(/\D/g, '') || '';
+    const purePhone = (rawPhone.startsWith('39') && rawPhone.length > 10) ? rawPhone.slice(-10) : rawPhone.slice(-10);
+    
+    // Se il numero è in rubrica, USA IL NOME DELLA RUBRICA (ignora l'identità globale)
+    if (purePhone && localContacts[purePhone]) {
+      return `${localContacts[purePhone].firstName} ${localContacts[purePhone].lastName}`.trim();
+    }
+    
+    // Fallback al nome utente globale se non è salvato in rubrica
+    return app.customer?.displayName || 'Cliente';
+  };
+
   useEffect(() => {
     if (!tenantId) return;
     const q = query(collection(db, 'salons', tenantId, 'calendar_exceptions'));
@@ -155,51 +169,36 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
   useEffect(() => {
     const handleOpenManualBooking = () => setIsManualBookingOpen(true);
     const handleOpenScheduleMaintenance = () => setIsScheduleMaintenanceOpen(true);
-
     window.addEventListener('open-manual-booking', handleOpenManualBooking);
     window.addEventListener('open-schedule-maintenance', handleOpenScheduleMaintenance);
-
     return () => {
       window.removeEventListener('open-manual-booking', handleOpenManualBooking);
       window.removeEventListener('open-schedule-maintenance', handleOpenScheduleMaintenance);
     };
   }, []);
 
-  const [sendingProposal, setSendingProposal] = useState(false);
-  const [shiftConfirm, setShiftConfirm] = useState<{app: Appointment & { customer?: UserProfile }, direction: 'anticipo' | 'posticipo'} | null>(null);
-  const [currentTime, setCurrentTime] = useState(new Date());
-
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 60000);
     return () => clearInterval(timer);
   }, []);
 
+  // Listener Proposte Cambio Orario
   useEffect(() => {
     if (!profile || profile.role !== 'barber' || !tenantId) return;
-
     const checkAndAdvance = async () => {
       try {
-        // 🚀 QUERY MULTI-TENANT
         const q = query(collection(db, 'salons', tenantId, 'rescheduleProposals'), where('status', 'in', ['active', 'completed']));
         const snapshot = await getDocs(q);
         
         for (const docSnap of snapshot.docs) {
           const proposal = { id: docSnap.id, ...docSnap.data() } as RescheduleProposal;
-          
           if (isAfter(currentTime, proposal.gapStartTime.toDate())) {
             await deleteDoc(doc(db, 'salons', tenantId, 'rescheduleProposals', proposal.id!));
-            const notifQ = query(collection(db, 'salons', tenantId, 'notifications'), where('proposalId', '==', proposal.id));
-            const notifSnap = await getDocs(notifQ);
-            for (const nd of notifSnap.docs) {
-              await deleteDoc(doc(db, 'salons', tenantId, 'notifications', nd.id));
-            }
             continue;
           }
-
           if (proposal.status === 'completed') continue;
 
           const currentTarget = proposal.targets[proposal.currentIdx];
-          
           if (currentTarget && currentTarget.status === 'pending' && currentTarget.expiresAt) {
             const expiresAt = currentTarget.expiresAt.toDate();
             if (isAfter(currentTime, expiresAt)) {
@@ -232,44 +231,39 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
                 currentIdx: nextIdx < updatedTargets.length ? nextIdx : proposal.currentIdx,
                 status: newStatus
               });
-              
-              const notifQ = query(collection(db, 'salons', tenantId, 'notifications'), 
-                where('proposalId', '==', proposal.id), 
-                where('userId', '==', currentTarget.userId)
-              );
-              const notifSnap = await getDocs(notifQ);
-              for (const d of notifSnap.docs) {
-                await deleteDoc(doc(db, 'salons', tenantId, 'notifications', d.id));
-              }
             }
           }
         }
       } catch (error) {
         console.error("Error in checkAndAdvance:", error);
+    
+        try {
+          await logSystemError({
+            type: 'manual_booking_failure',
+            tenantId: tenantId,
+            userId: profile?.uid || 'unknown',
+            userName: profile?.displayName || 'Barber',
+            error: error instanceof Error ? error.message : String(error)
+          });
+        } catch (logErr) {
+          console.error("Fallimento critico del logger:", logErr);
+        }
       }
     };
-
     checkAndAdvance();
   }, [currentTime, profile, tenantId]);
 
+  // Caricamento Appuntamenti
   useEffect(() => {
     if (!tenantId) return;
-    // 🚀 QUERY MULTI-TENANT
     const path = `salons/${tenantId}/appointments`;
-    const q = query(
-      collection(db, path),
-      orderBy('startTime', 'asc')
-    );
+    const q = query(collection(db, path), orderBy('startTime', 'asc'));
 
     const unsubscribe = onSnapshot(q, async (snapshot) => {
-      const docs = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Appointment[];
+      const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Appointment[];
 
       const appointmentsWithProfiles = await Promise.all(docs.map(async (app) => {
         try {
-          // 🚀 USERS RESTA ALLA RADICE GLOBALE
           const userDoc = app.customerId !== 'manual_entry' ? await getDoc(doc(db, 'users', app.customerId)) : null;
           return {
             ...app,
@@ -300,15 +294,10 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
 
         setTimeout(() => {
           const element = document.getElementById(`appointment-${selectedAppointmentId}`);
-          if (element) {
-            element.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
-          }
+          if (element) element.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
         }, 500);
 
-        setTimeout(() => {
-          setHighlightedAppId(null);
-        }, 5000);
-        
+        setTimeout(() => setHighlightedAppId(null), 5000);
         if (onAppointmentDialogClose) onAppointmentDialogClose();
       }
     }
@@ -321,34 +310,31 @@ export default function BarberDashboard({ selectedAppointmentId, selectedNotific
         setDeclinedProposalNotif(notif);
       }
     };
-    
     window.addEventListener('special-notification-click', handleSpecialNotif);
     return () => window.removeEventListener('special-notification-click', handleSpecialNotif);
   }, []);
 
   const startEditingCustomer = () => {
     if (!selectedAppointment) return;
-    const isFriend = selectedAppointment.isForFriend;
-    const fullName = isFriend 
-      ? `${selectedAppointment.friendDetails?.firstName || ''} ${selectedAppointment.friendDetails?.lastName || ''}` 
-      : (selectedAppointment.customer?.displayName || '');
-    const nameParts = fullName.trim().split(' ');
+    // Usa la funzione traduttrice per pre-popolare il form col nome VERO usato dal barbiere
+    const fullName = getDisplayName(selectedAppointment);
+    const nameParts = fullName.split(' ');
     
     setEditCustomerForm({
       firstName: nameParts[0] || '',
       lastName: nameParts.slice(1).join(' ') || '',
-      phone: (isFriend ? selectedAppointment.friendDetails?.phone : selectedAppointment.customer?.phoneNumber) || '',
-      email: (isFriend ? selectedAppointment.friendDetails?.email : selectedAppointment.customer?.email) || ''
+      phone: (selectedAppointment.isForFriend ? selectedAppointment.friendDetails?.phone : selectedAppointment.customer?.phoneNumber) || '',
+      email: (selectedAppointment.isForFriend ? selectedAppointment.friendDetails?.email : selectedAppointment.customer?.email) || ''
     });
     setIsEditingCustomer(true);
   };
 
-const handleSaveCustomerEdits = async () => {
+  // 🚀 SALVATAGGIO CLIENTE BLINDATO (SOLO LOCALE)
+  const handleSaveCustomerEdits = async () => {
     if (!selectedAppointment || !tenantId) return;
     setSavingCustomer(true);
     try {
       const fullName = `${editCustomerForm.firstName} ${editCustomerForm.lastName}`.trim();
-      
       const rawPhone = editCustomerForm.phone.replace(/\D/g, '');
       const pure10Digits = (rawPhone.startsWith('39') && rawPhone.length > 10) 
         ? rawPhone.substring(2) 
@@ -356,9 +342,9 @@ const handleSaveCustomerEdits = async () => {
       const fullPhone = pure10Digits.length >= 9 ? `+39${pure10Digits}` : '';
       const cleanContactPhone = pure10Digits;
 
-      // 🚀 QUERY MULTI-TENANT
       const appRef = doc(db, 'salons', tenantId, 'appointments', selectedAppointment.id!);
       
+      // 1. Aggiorna i dati denormalizzati nell'appuntamento
       if (selectedAppointment.isForFriend) {
         await updateDoc(appRef, {
           'friendDetails.firstName': editCustomerForm.firstName,
@@ -372,49 +358,29 @@ const handleSaveCustomerEdits = async () => {
           'customer.phoneNumber': fullPhone,
           'customer.email': editCustomerForm.email
         });
-
-        const isAppUser = selectedAppointment.customerId && selectedAppointment.customerId !== 'manual_entry' && selectedAppointment.customerId !== 'test_entry';
-        
-        if (isAppUser) {
-          try {
-            // 🚀 USERS RESTA ALLA RADICE GLOBALE
-            await updateDoc(doc(db, 'users', selectedAppointment.customerId), {
-              displayName: fullName,
-              phoneNumber: fullPhone,
-              ...(editCustomerForm.email ? { email: editCustomerForm.email } : {}),
-              updatedAt: Timestamp.now()
-            });
-            if (cleanContactPhone) {
-              // 🚀 QUERY MULTI-TENANT
-              try { await deleteDoc(doc(db, 'salons', tenantId, 'contacts', cleanContactPhone)); } catch(e) {}
-            }
-          } catch (e) {
-            console.warn("Salto aggiornamento cloud utente (documento protetto o legacy).");
-          }
-        } else {
-          if (cleanContactPhone) {
-            // 🚀 QUERY MULTI-TENANT
-            await setDoc(doc(db, 'salons', tenantId, 'contacts', cleanContactPhone), {
-              firstName: editCustomerForm.firstName,
-              lastName: editCustomerForm.lastName,
-              firstNameLower: editCustomerForm.firstName.toLowerCase(),
-              lastNameLower: editCustomerForm.lastName.toLowerCase(),
-              phone: cleanContactPhone,
-              phonePrefix: '+39',
-              email: editCustomerForm.email,
-              updatedAt: Timestamp.now()
-            }, { merge: true });
-          }
-        }
       }
 
+      // 2. 🚀 SALVA SEMPRE IN RUBRICA LOCALE (Non tocca mai /users)
+      if (cleanContactPhone) {
+        await setDoc(doc(db, 'salons', tenantId, 'contacts', cleanContactPhone), {
+          firstName: editCustomerForm.firstName,
+          lastName: editCustomerForm.lastName,
+          firstNameLower: editCustomerForm.firstName.toLowerCase(),
+          lastNameLower: editCustomerForm.lastName.toLowerCase(),
+          phone: cleanContactPhone,
+          phonePrefix: '+39',
+          email: editCustomerForm.email,
+          updatedAt: Timestamp.now()
+        }, { merge: true }); // Merge evita di cancellare altri appunti
+      }
+
+      // 3. Aggiorna la UI
       const updatedCustomerObj = selectedAppointment.isForFriend ? undefined : {
         ...selectedAppointment.customer!,
         displayName: fullName,
         phoneNumber: fullPhone,
         email: editCustomerForm.email
       };
-      
       const updatedFriendObj = selectedAppointment.isForFriend ? {
         ...selectedAppointment.friendDetails!,
         firstName: editCustomerForm.firstName,
@@ -438,6 +404,19 @@ const handleSaveCustomerEdits = async () => {
     } catch (error) {
       console.error("Errore salvataggio cliente:", error);
       alert("Errore durante l'aggiornamento dei dati.");
+
+      try {
+        await logSystemError({
+          type: 'manual_booking_failure',
+          tenantId: tenantId,
+          userId: profile?.uid || 'unknown',
+          userName: profile?.displayName || 'Barber',
+          error: error instanceof Error ? error.message : String(error)
+        });
+      } catch (logErr) {
+        console.error("Fallimento critico del logger:", logErr);
+      }
+
     } finally {
       setSavingCustomer(false);
     }
@@ -445,7 +424,6 @@ const handleSaveCustomerEdits = async () => {
 
   const handleCancel = async (app: Appointment) => {
     if (!tenantId) return;
-    const path = `salons/${tenantId}/appointments/${app.id}`;
     try {
       await updateDoc(doc(db, 'salons', tenantId, 'appointments', app.id!), {
         status: 'cancelled',
@@ -465,7 +443,21 @@ const handleSaveCustomerEdits = async () => {
         });
       }
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, path);
+      console.error("Errore cancellazione", error);
+      
+      try {
+        await logSystemError({
+          type: 'manual_booking_failure',
+          tenantId: tenantId,
+          userId: profile?.uid || 'unknown',
+          userName: profile?.displayName || 'Barber',
+          error: error instanceof Error ? error.message : String(error)
+        });
+      } catch (logErr) {
+        console.error("Fallimento critico del logger:", logErr);
+      }
+
+
     }
   };
 
@@ -474,15 +466,13 @@ const handleSaveCustomerEdits = async () => {
     const searchLower = searchTerm.toLowerCase().trim();
 
     if (searchType === 'name') {
-      const customerName = app.customer?.displayName?.toLowerCase() || '';
-      const friendName = app.friendDetails ? 
-        `${app.friendDetails.firstName} ${app.friendDetails.lastName}`.toLowerCase() : '';
-      return customerName.includes(searchLower) || friendName.includes(searchLower);
+      // 🚀 Usa il nome tradotto per la ricerca
+      const displayName = getDisplayName(app).toLowerCase();
+      return displayName.includes(searchLower);
     } else {
-      const customerPhone = app.customer?.phoneNumber || '';
-      const friendPhone = app.friendDetails?.phone || '';
+      const rawPhone = app.isForFriend ? app.friendDetails?.phone : app.customer?.phoneNumber;
       const normSearch = searchLower.replace(/\D/g, '');
-      return customerPhone.includes(normSearch) || friendPhone.includes(normSearch);
+      return (rawPhone || '').replace(/\D/g, '').includes(normSearch);
     }
   };
 
@@ -637,7 +627,20 @@ const handleSaveCustomerEdits = async () => {
 
       setGapWizardStep(3);
     } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, 'rescheduleProposals');
+      console.error("Error creating proposal", error);
+      
+      try {
+        await logSystemError({
+          type: 'manual_booking_failure',
+          tenantId: tenantId,
+          userId: profile?.uid || 'unknown',
+          userName: profile?.displayName || 'Barber',
+          error: error instanceof Error ? error.message : String(error)
+        });
+      } catch (logErr) {
+        console.error("Fallimento critico del logger:", logErr);
+      }
+
     } finally {
       setSendingProposal(false);
     }
@@ -710,7 +713,19 @@ const handleSaveCustomerEdits = async () => {
       setRescheduleCandidates([candidateApp]);
       setGapPlacements({ [candidateApp.id!]: newStart });
     } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, 'rescheduleProposals');
+      console.error("Error creating shift proposal", error);
+      
+      try {
+        await logSystemError({
+          type: 'manual_booking_failure',
+          tenantId: tenantId,
+          userId: profile?.uid || 'unknown',
+          userName: profile?.displayName || 'Barber',
+          error: error instanceof Error ? error.message : String(error)
+        });
+      } catch (logErr) {
+        console.error("Fallimento critico del logger:", logErr);
+      }
     } finally {
       setSendingProposal(false);
     }
@@ -974,7 +989,8 @@ const handleSaveCustomerEdits = async () => {
                   return (
                     <div key={id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 bg-gray-50 rounded-xl">
                       <div>
-                        <span className="font-bold block">{candidate.isForFriend ? candidate.friendDetails?.firstName : candidate.customer?.displayName}</span>
+                        {/* 🚀 USA LA FUNZIONE TRADUTTRICE QUI */}
+                        <span className="font-bold block">{getDisplayName(candidate)}</span>
                         <span className="text-xs text-gray-500">Servizio: {dur} min</span>
                       </div>
                       <select 
@@ -1010,12 +1026,13 @@ const handleSaveCustomerEdits = async () => {
                   {selectedCandidates.map(id => {
                     const candidate = rescheduleCandidates.find(c => c.id === id)!;
                     const phone = candidate.isForFriend ? candidate.friendDetails?.phone : candidate.customer?.phoneNumber;
-                    const name = candidate.isForFriend ? candidate.friendDetails?.firstName : candidate.customer?.displayName;
+                    // 🚀 TRADUCI IL NOME
+                    const name = getDisplayName(candidate);
                     const proposedTime = gapPlacements[id] || showGapFiller.start;
                     
                     const waLink = phone ? generateWhatsAppLink(
                       'reschedule_proposal_sent', 
-                      name || 'Cliente', 
+                      name, 
                       phone, 
                       format(proposedTime, 'dd/MM/yyyy'), 
                       format(proposedTime, 'HH:mm'),
@@ -1053,7 +1070,7 @@ const handleSaveCustomerEdits = async () => {
           {calendarData.items.map(item => {
             const apps = getAppointmentsForItem(item).filter(a => a.status !== 'cancelled'); 
             
-            // --- CALCOLO TURNI E OVERLAY "FUORI TURNO" (Corretto per orari frazionati) ---
+            // --- CALCOLO TURNI E OVERLAY "FUORI TURNO" ---
             let isBreak = false;
             let offRange: { start: Date, end: Date, label: string } | null = null;
 
@@ -1108,9 +1125,7 @@ const handleSaveCustomerEdits = async () => {
               }
             }
 
-            const isMatched = apps.length > 0 && searchTerm && apps.some(app => isMatchedBySearch(app));
-
-            // --- CALCOLO BUCHI ORARI (Intelligente e Vincolato ai Turni) ---
+            // --- CALCOLO BUCHI ORARI ---
             const gapsForThisItem: { start: Date, end: Date, duration: number }[] = [];
             
             if (!isBreak && !searchTerm && calendarData.type === 'daily' && salonSettings?.weeklySchedule) {
@@ -1134,10 +1149,8 @@ const handleSaveCustomerEdits = async () => {
                 const sM = Math.round((range.start - sH) * 60);
                 const eH = Math.floor(range.end);
                 const eM = Math.round((range.end - eH) * 60);
-
                 const shiftStart = setMinutes(setHours(startOfDay(selectedDate), sH), sM);
                 const shiftEnd = setMinutes(setHours(startOfDay(selectedDate), eH), eM);
-
                 return isBefore(itemStart, shiftEnd) && isAfter(itemEnd, shiftStart);
               });
 
@@ -1145,7 +1158,6 @@ const handleSaveCustomerEdits = async () => {
                 const sH = Math.floor(currentShift.start);
                 const sM = Math.round((currentShift.start - sH) * 60);
                 const shiftStart = setMinutes(setHours(startOfDay(selectedDate), sH), sM);
-
                 const eH = Math.floor(currentShift.end);
                 const eM = Math.round((currentShift.end - eH) * 60);
                 const shiftEnd = setMinutes(setHours(startOfDay(selectedDate), eH), eM);
@@ -1248,10 +1260,8 @@ const handleSaveCustomerEdits = async () => {
 
                           const app = itemObj.data as Appointment & { customer?: UserProfile };
                           const duration = (app.endTime.toDate().getTime() - app.startTime.toDate().getTime()) / (1000 * 60);
-                          
                           const nominalDuration = app.services.reduce((acc, s) => acc + s.duration, 0);
                           const isCompressed = duration < nominalDuration;
-                          
                           const isMobile = typeof window !== 'undefined' && window.innerWidth < 640;
                           const baseWidth = isMobile ? 7 : 10; 
                           const cardWidth = (duration / 30) * baseWidth; 
@@ -1259,7 +1269,6 @@ const handleSaveCustomerEdits = async () => {
                           const isCandidate = rescheduleCandidates.some(c => c.id === app.id);
                           const isSelected = selectedCandidates.includes(app.id!);
                           const selectionMode = showGapFiller !== null;
-
                           const isAdjacentNext = selectionMode && Math.abs(app.startTime.toDate().getTime() - showGapFiller!.end.getTime()) < 60000;
                           const isAdjacentPrev = selectionMode && Math.abs(app.endTime.toDate().getTime() - showGapFiller!.start.getTime()) < 60000;
 
@@ -1311,7 +1320,8 @@ const handleSaveCustomerEdits = async () => {
                               <div>
                                 <div className="flex justify-between items-start gap-2">
                                   <div className="font-bold text-[11px] sm:text-xs truncate">
-                                    {app.isForFriend ? `Per: ${app.friendDetails?.firstName}` : app.customer?.displayName}
+                                    {/* 🚀 USA LA FUNZIONE TRADUTTRICE QUI */}
+                                    {getDisplayName(app)}
                                   </div>
                                   <div className="text-[9px] font-bold opacity-60 flex flex-col items-end leading-tight shrink-0">
                                     <span>{format(app.startTime.toDate(), 'HH:mm')}</span>
@@ -1429,9 +1439,8 @@ const handleSaveCustomerEdits = async () => {
                     <div className="animate-in fade-in duration-200">
                       <div className="flex items-start justify-between gap-2">
                         <div className="text-2xl font-bold leading-tight">
-                          {selectedAppointment.isForFriend 
-                            ? `${selectedAppointment.friendDetails?.firstName} ${selectedAppointment.friendDetails?.lastName || ''}` 
-                            : selectedAppointment.customer?.displayName}
+                          {/* 🚀 USA LA FUNZIONE TRADUTTRICE QUI */}
+                          {getDisplayName(selectedAppointment)}
                         </div>
                         <button onClick={startEditingCustomer} className="p-2 bg-gray-100 text-gray-500 hover:text-black hover:bg-gray-200 rounded-xl transition-all shadow-sm shrink-0">
                           <Settings size={18} />
@@ -1516,11 +1525,8 @@ const handleSaveCustomerEdits = async () => {
                     activeNotifType === 'proposal_accepted' ? 'proposal_accepted' :
                     'manual_management_required'
                   }
-                  customerName={
-                    selectedAppointment.isForFriend 
-                      ? selectedAppointment.friendDetails?.firstName || 'Cliente'
-                      : selectedAppointment.customer?.displayName || 'Cliente'
-                  }
+                  // 🚀 TRADUCI IL NOME PER WHATSAPP
+                  customerName={getDisplayName(selectedAppointment)}
                   customerPhone={
                     selectedAppointment.isForFriend 
                       ? selectedAppointment.friendDetails?.phone 
@@ -1625,7 +1631,8 @@ const handleSaveCustomerEdits = async () => {
             </div>
             <h3 className="text-2xl font-bold mb-2">Conferma {shiftConfirm.direction === 'anticipo' ? 'Anticipo' : 'Posticipo'}</h3>
             <p className="text-gray-500 mb-8 text-sm">
-              Vuoi inviare una proposta a <span className="font-bold text-black">{shiftConfirm.app.isForFriend ? shiftConfirm.app.friendDetails?.firstName : shiftConfirm.app.customer?.displayName}</span> per spostare l'appuntamento alle <span className="font-bold text-black">{format(shiftConfirm.direction === 'anticipo' ? showGapFiller!.start : addMinutes(showGapFiller!.end, -(shiftConfirm.app.services.reduce((acc, s) => acc + s.duration, 0))), 'HH:mm')}</span>?
+              {/* 🚀 TRADUCI IL NOME NEL MODALE DI ANTICIPO */}
+              Vuoi inviare una proposta a <span className="font-bold text-black">{getDisplayName(shiftConfirm.app)}</span> per spostare l'appuntamento alle <span className="font-bold text-black">{format(shiftConfirm.direction === 'anticipo' ? showGapFiller!.start : addMinutes(showGapFiller!.end, -(shiftConfirm.app.services.reduce((acc, s) => acc + s.duration, 0))), 'HH:mm')}</span>?
             </p>
             <div className="flex flex-col gap-3">
               <button
@@ -1728,7 +1735,8 @@ const handleSaveCustomerEdits = async () => {
                 <div className="divide-y divide-gray-50">
                   {tomorrowsAppointments.map(app => {
                     const phone = (app.isForFriend ? app.friendDetails?.phone : app.customer?.phoneNumber) || '';
-                    const name = (app.isForFriend ? app.friendDetails?.firstName : app.customer?.displayName) || 'Cliente';
+                    // 🚀 TRADUCI IL NOME PER I PROMEMORIA
+                    const name = getDisplayName(app);
                     const time = app.startTime?.toDate ? format(app.startTime.toDate(), 'HH:mm') : '--:--';
                     
                     const servicesList = app.services && Array.isArray(app.services) 
@@ -1794,7 +1802,6 @@ interface ManualBookingModalProps {
 }
 
 function ManualBookingModal({ onClose, onSuccess }: ManualBookingModalProps) {
-  // 🚀 ESTRAZIONE TENANT ID E SETTINGS
   const { tenantId } = useAuth();
   const { settings: salonSettings } = useSalonSettings(tenantId);
 
@@ -1803,7 +1810,7 @@ function ManualBookingModal({ onClose, onSuccess }: ManualBookingModalProps) {
   const [phonePrefix, setPhonePrefix] = useState('+39');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
-  const [selectedServices, setSelectedServices] = useState<Service[]>([]);
+  const [selectedServices, setSelectedServices] = useState<any[]>([]);
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [availableSlots, setAvailableSlots] = useState<Date[]>([]);
   const [selectedSlot, setSelectedSlot] = useState<Date | null>(null);
@@ -1814,7 +1821,6 @@ function ManualBookingModal({ onClose, onSuccess }: ManualBookingModalProps) {
   
   const [globalDirectory, setGlobalDirectory] = useState<{ firstName: string, lastName: string, phone: string, email: string, displayPhone: string, phonePrefix: string }[]>([]);
   const [directoryLoaded, setDirectoryLoaded] = useState(false);
-  const [showCalendar, setShowCalendar] = useState(false);
 
   const searchContainerRef = useRef<HTMLDivElement>(null);
 
@@ -1828,7 +1834,6 @@ function ManualBookingModal({ onClose, onSuccess }: ManualBookingModalProps) {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // 🚀 QUERY MULTI-TENANT
   useEffect(() => {
     if (!tenantId) return;
     const q = query(collection(db, 'salons', tenantId, 'calendar_exceptions'));
@@ -1839,7 +1844,7 @@ function ManualBookingModal({ onClose, onSuccess }: ManualBookingModalProps) {
     return () => unsubscribe();
   }, [tenantId]);
 
-useEffect(() => {
+  useEffect(() => {
     if (!tenantId) return;
     const fetchTenantDirectory = async () => {
       try {
@@ -1889,10 +1894,8 @@ useEffect(() => {
 
     const filtered = globalDirectory.filter(person => {
       const fullContactName = `${person.firstName} ${person.lastName}`.toLowerCase();
-      
       const matchesFirst = fullContactName.includes(searchFirst);
       const matchesLast = !searchLast || fullContactName.includes(searchLast);
-
       return matchesFirst && matchesLast;
     });
 
@@ -1908,28 +1911,14 @@ useEffect(() => {
     setSuggestions([]);
   };
 
-  const next30Days = React.useMemo(() => {
-    if (!salonSettings?.weeklySchedule) return [];
-    const days = eachDayOfInterval({ start: new Date(), end: addDays(new Date(), 30) });
-    return days.filter(d => {
-      const dateString = format(d, 'yyyy-MM-dd');
-      const exception = specialDays.find(ex => ex.date === dateString);
-      if (exception) return !exception.isClosed;
-      return salonSettings.weeklySchedule[getDay(d)]?.isOpen;
-    });
-  }, [specialDays, salonSettings]);
-
   const disabledDays = React.useMemo(() => {
     return [
       { before: startOfDay(new Date()) },
       (date: Date) => {
         const dateString = format(date, 'yyyy-MM-dd');
         const exception = specialDays.find(ex => ex.date === dateString);
-        if (exception) {
-          return exception.isClosed;
-        }
+        if (exception) return exception.isClosed;
         if (!salonSettings?.weeklySchedule[getDay(date)]?.isOpen) return true;
-        
         return false;
       }
     ];
@@ -1967,7 +1956,6 @@ useEffect(() => {
     }
 
     try {
-      // 🚀 QUERY MULTI-TENANT
       const q = query(
         collection(db, 'salons', tenantId, 'appointments'),
         where('startTime', '>=', Timestamp.fromDate(dayStart)),
@@ -2020,7 +2008,7 @@ useEffect(() => {
           mappedAppointments,
           { start: shiftStart, end: shiftEnd },
           salonSettings.yieldConfig,
-          true // isManualBooking: bypassa regole di yield
+          true
         );
 
         allValidSlots = [...allValidSlots, ...shiftSlots];
@@ -2034,11 +2022,23 @@ useEffect(() => {
       setAvailableSlots(uniqueSortedSlots.filter(slot => isAfter(slot, now)));
     } catch (error) {
       console.error("Error calculating slots:", error);
+      try {
+        await logSystemError({
+          type: 'manual_booking_failure',
+          tenantId: tenantId,
+          userId: profile?.uid || 'unknown',
+          userName: profile?.displayName || 'Barber',
+          error: error instanceof Error ? error.message : String(error)
+        });
+      } catch (logErr) {
+        console.error("Fallimento critico del logger:", logErr);
+      }
     } finally {
       setLoading(false);
     }
   };
 
+  // 🚀 INSERIMENTO MANUALE BLINDATO
   const handleBooking = async () => {
     if (!firstName || !lastName || !phone || !selectedSlot || selectedServices.length === 0 || !tenantId || !salonSettings?.weeklySchedule) {
       alert("Nome, Cognome, Telefono, Servizi e Orario sono obbligatori.");
@@ -2062,7 +2062,6 @@ useEffect(() => {
     const dayStart = startOfDay(selectedSlot);
     const dayEnd = endOfDay(selectedSlot);
     
-    // 🚀 QUERY MULTI-TENANT
     const qDay = query(
       collection(db, 'salons', tenantId, 'appointments'),
       where('startTime', '>=', Timestamp.fromDate(dayStart)),
@@ -2107,7 +2106,6 @@ useEffect(() => {
       let finalCustomerId = 'manual_entry';
       let isRegisteredUser = false;
 
-      // 🚀 USERS RESTA ALLA RADICE GLOBALE
       const usersRef = collection(db, 'users');
       const userQuery = query(usersRef, where('phoneNumber', '==', fullPhoneNumber), limit(1));
       const userSnapshot = await getDocs(userQuery);
@@ -2115,17 +2113,11 @@ useEffect(() => {
       if (!userSnapshot.empty) {
         finalCustomerId = userSnapshot.docs[0].id;
         isRegisteredUser = true;
+        // ❌ Rimosso updateDoc('/users') e deleteDoc('contacts')
+      }
 
-        await updateDoc(doc(db, 'users', finalCustomerId), {
-          displayName: `${firstName} ${lastName}`,
-          ...(email ? { email: email } : {}),
-          updatedAt: Timestamp.now()
-        });
-
-        // 🚀 ELIMINA DA CONTATTI DEL SALONE SE ESISTE
-        try { await deleteDoc(doc(db, 'salons', tenantId, 'contacts', cleanContactPhone)); } catch(e) {}
-      } else {
-        // 🚀 SALVA CONTATTO NEL SALONE
+      // 🚀 SALVA SEMPRE CONTATTO NELLA RUBRICA LOCALE DEL SALONE
+      if (cleanContactPhone) {
         await setDoc(doc(db, 'salons', tenantId, 'contacts', cleanContactPhone), {
           firstName,
           lastName,
@@ -2138,7 +2130,6 @@ useEffect(() => {
         }, { merge: true });
       }
 
-      // 🚀 QUERY MULTI-TENANT PER CANCELLARE OVERLAPS E SALVARE
       const q = query(
         collection(db, 'salons', tenantId, 'appointments'),
         where('startTime', '==', Timestamp.fromDate(selectedSlot)),
@@ -2194,7 +2185,20 @@ useEffect(() => {
       onSuccess();
     } catch (error) {
       console.error("Error booking:", error);
-      alert("Errore durante la prenotazione.");
+      alert("Errore durante la prenotazione. Permessi insufficienti o dati mancanti.");
+
+      try {
+        await logSystemError({
+          type: 'manual_booking_failure',
+          tenantId: tenantId,
+          userId: profile?.uid || 'unknown',
+          userName: profile?.displayName || 'Barber',
+          error: error instanceof Error ? error.message : String(error)
+        });
+      } catch (logErr) {
+        console.error("Fallimento critico del logger:", logErr);
+      }
+
     } finally {
       setLoading(false);
     }
@@ -2442,7 +2446,6 @@ useEffect(() => {
           </button>
         </div>
       </div>
-
     </div>
   );
 }
