@@ -638,7 +638,7 @@ export default function MultiBarberDashboard({ selectedAppointmentId, selectedNo
                                   return (
                                     <button 
                                       key={`gap-${idx}`} 
-                                      onClick={() => setShowGapFiller({ start: itemObj.data.start, end: itemObj.data.end, staffId: staffObj?.uid })} 
+                                      onClick={() => findCandidatesForGap({ start: itemObj.data.start, end: itemObj.data.end, staffId: staffObj?.uid })} 
                                       style={{ maxWidth: '85vw' }}
                                       className="flex-1 h-[52px] min-w-[80px] bg-amber-50/30 border-2 border-dashed border-amber-300/80 text-amber-600 rounded-xl hover:bg-amber-100/50 hover:border-amber-400 transition-all flex flex-col items-center justify-center font-bold text-[11px]"
                                     >
@@ -755,7 +755,7 @@ export default function MultiBarberDashboard({ selectedAppointmentId, selectedNo
           isOwner={isOwner}
           onClose={() => setSelectedAppointment(null)}
           onCancelRequest={(app) => { setShowCancelConfirm(app); setSelectedAppointment(null); }}
-          onProposeShift={(app) => { setShowGapFiller({ start: app.startTime.toDate(), end: app.endTime.toDate(), appointmentId: app.id!, staffId: app.staffId }); setSelectedAppointment(null); }}
+          onProposeShift={(app) => { findCandidatesForGap({ start: app.startTime.toDate(), end: app.endTime.toDate(), appointmentId: app.id!, staffId: app.staffId }); setSelectedAppointment(null); }}
         />
       )}
 

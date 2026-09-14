@@ -574,7 +574,7 @@ export default function MonoBarberDashboard({ selectedAppointmentId, selectedNot
                           return (
                             <button 
                               key={`gap-${idx}`} 
-                              onClick={() => setShowGapFiller({ start: itemObj.data.start, end: itemObj.data.end })} 
+                              onClick={() => findCandidatesForGap({ start: itemObj.data.start, end: itemObj.data.end })} 
                               style={{ width: `${cWidth}rem`, maxWidth: '85vw', minWidth: '4.5rem' }} 
                               className="shrink-0 h-[52px] bg-amber-50 border-2 border-dashed border-amber-300 text-amber-600 rounded-xl hover:bg-amber-100 transition-all flex flex-col items-center justify-center font-bold text-[11px]"
                             >
@@ -685,7 +685,7 @@ export default function MonoBarberDashboard({ selectedAppointmentId, selectedNot
           isOwner={isOwner}
           onClose={() => setSelectedAppointment(null)}
           onCancelRequest={(app) => { setShowCancelConfirm(app); setSelectedAppointment(null); }}
-          onProposeShift={(app) => { setShowGapFiller({ start: app.startTime.toDate(), end: app.endTime.toDate(), appointmentId: app.id! }); setSelectedAppointment(null); }}
+          onProposeShift={(app) => { findCandidatesForGap({ start: app.startTime.toDate(), end: app.endTime.toDate(), appointmentId: app.id! }); setSelectedAppointment(null); }}
         />
       )}
 
