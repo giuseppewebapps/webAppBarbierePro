@@ -72,6 +72,8 @@ export interface Notification {
   appointmentId?: string;
 }
 
+export type ProposalType = 'anticipo' | 'posticipo' | 'cambio';
+
 export interface RescheduleProposal {
   id?: string;
   gapStartTime: any;
@@ -85,6 +87,7 @@ export interface RescheduleProposal {
     expiresAt?: any;
     proposedStartTime: any;
     proposedEndTime?: any;
+    type?: ProposalType; // 🚀 NUOVO: tipo di proposta (anticipo/posticipo/cambio)
   }[];
   currentIdx: number;
   status: 'active' | 'completed' | 'cancelled';

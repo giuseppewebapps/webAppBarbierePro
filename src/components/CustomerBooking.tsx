@@ -46,6 +46,7 @@ import {
   AlertCircle,
   Globe,
   ArrowUpCircle,
+  ArrowDownCircle,
   ChevronDown,
   Mail,
   Instagram,
@@ -55,7 +56,7 @@ import {
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { COUNTRY_CODES } from '../constants';
-import { Appointment, Service, RescheduleProposal, SpecialDay, TimeRange, StaffProfile } from '../types';
+import { Appointment, Service, RescheduleProposal, SpecialDay, TimeRange, StaffProfile, ProposalType } from '../types';
 import { calculateMultiStaffSlots } from '../utils/slotEngine'; // 🚀 IMPORTATO IL NUOVO MOTORE
 
 enum OperationType {
@@ -1054,10 +1055,13 @@ export default function CustomerBooking({
             currentIdx: nextIdx
           });
 
+          const nextTarget = updatedTargets[nextIdx];
+          const nextProposalType = getProposalType(freshProposal, nextTarget);
+          const nextDirectionText = nextProposalType === 'posticipo' ? 'posticipare' : nextProposalType === 'cambio' ? 'cambiare orario' : 'anticipare';
           await addDoc(collection(db, 'salons', tenantId, 'notifications'), {
-            userId: updatedTargets[nextIdx].userId,
+            userId: nextTarget.userId,
             title: 'Proposta di Cambio Orario',
-            message: `Il barbiere ti propone un anticipo! Hai 15 minuti per accettare.`,
+            message: `Il barbiere ti propone di ${nextDirectionText}! Hai 15 minuti per accettare.`,
             type: 'reschedule_proposal',
             read: false,
             createdAt: Timestamp.now(),
@@ -1139,6 +1143,18 @@ export default function CustomerBooking({
     } finally {
       setLoading(false);
     }
+  };
+
+  const getProposalType = (proposal: RescheduleProposal, target?: RescheduleProposal['targets'][0]): ProposalType => {
+    const t = target || proposal.targets[proposal.currentIdx];
+    if (t.type) return t.type;
+    const originalApp = myAppointments.find(a => a.id === t.appointmentId);
+    const proposed = (t.proposedStartTime || proposal.gapStartTime).toDate();
+    const original = originalApp?.startTime.toDate();
+    if (!original) return 'cambio';
+    if (proposed.getTime() < original.getTime()) return 'anticipo';
+    if (proposed.getTime() > original.getTime()) return 'posticipo';
+    return 'cambio';
   };
 
   const disabledDays = useMemo(() => {
@@ -1230,7 +1246,11 @@ export default function CustomerBooking({
           
           {proposals.length > 0 && (
             <div className="space-y-4">
-              {proposals.map(proposal => (
+              {proposals.map(proposal => {
+                const proposalType = getProposalType(proposal);
+                const isPosticipo = proposalType === 'posticipo';
+                const isCambio = proposalType === 'cambio';
+                return (
                 <button 
                   key={proposal.id} 
                   onClick={() => setSelectedProposal(proposal)}
@@ -1238,7 +1258,7 @@ export default function CustomerBooking({
                 >
                   <div className="flex items-center justify-between mb-3">
                     <div className="flex items-center gap-2 text-emerald-200 text-xs font-bold uppercase tracking-widest">
-                      <ArrowUpCircle size={16} /> Proposta di anticipo
+                      {isPosticipo ? <ArrowDownCircle size={16} /> : isCambio ? <Clock size={16} /> : <ArrowUpCircle size={16} />} {isPosticipo ? 'Proposta di posticipo' : isCambio ? 'Proposta di cambio orario' : 'Proposta di anticipo'}
                     </div>
                     <div className="text-[10px] bg-white/20 px-2 py-0.5 rounded-full font-bold">
                       Scade tra {Math.max(0, Math.ceil((proposal.targets[proposal.currentIdx].expiresAt.toDate().getTime() - currentTime.getTime()) / 60000))} min
@@ -1246,7 +1266,7 @@ export default function CustomerBooking({
                   </div>
                   <div className="flex items-center gap-4">
                     <div className="flex-1">
-                      <p className="text-sm opacity-90 mb-1">Il barbiere ti propone di anticipare:</p>
+                      <p className="text-sm opacity-90 mb-1">Il barbiere ti propone di {isPosticipo ? 'posticipare' : isCambio ? 'cambiare orario' : 'anticipare'}:</p>
                       <div className="flex items-center gap-3">
                         <span className="text-xl font-bold">{format((proposal.targets[proposal.currentIdx].proposedStartTime || proposal.gapStartTime).toDate(), 'HH:mm')}</span>
                         <span className="text-xs opacity-60">invece di</span>
@@ -1260,7 +1280,8 @@ export default function CustomerBooking({
                     </div>
                   </div>
                 </button>
-              ))}
+                );
+              })}
             </div>
           )}
 

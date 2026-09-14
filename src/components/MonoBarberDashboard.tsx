@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import AppointmentDetailsModal from './AppointmentDetailsModal';
 import { collection, query, orderBy, onSnapshot, doc, updateDoc, Timestamp, getDoc, getDocs, addDoc } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Appointment, UserProfile, RescheduleProposal, TimeRange, SpecialDay } from '../types';
+import { Appointment, UserProfile, RescheduleProposal, TimeRange, SpecialDay, ProposalType } from '../types';
 import { format, startOfDay, endOfDay, eachHourOfInterval, addHours, isSameDay, addDays, subDays, startOfWeek, endOfWeek, eachDayOfInterval, setHours, setMinutes, isAfter, isBefore, addMinutes, getDay } from 'date-fns';
 import { it } from 'date-fns/locale';
 import { Calendar as CalendarIcon, Phone, Clock, XCircle, AlertCircle, ChevronLeft, ChevronRight, Check, Send, CheckCircle2, MessageCircle, ArrowUpCircle, Search } from 'lucide-react';
@@ -192,11 +192,15 @@ export default function MonoBarberDashboard({ selectedAppointmentId, selectedNot
     try {
       const targets = selectedCandidates.map((id, idx) => {
         const candidate = rescheduleCandidates.find(c => c.id === id)!;
-        const specificTime = gapPlacements[id] || showGapFiller.start; 
-        return { userId: candidate.customerId, appointmentId: candidate.id!, status: idx === 0 ? 'pending' : 'waiting' as any, notifiedAt: idx === 0 ? Timestamp.now() : null, expiresAt: idx === 0 ? Timestamp.fromDate(addMinutes(new Date(), 15)) : null, proposedStartTime: Timestamp.fromDate(specificTime) };
+        const specificTime = gapPlacements[id] || showGapFiller.start;
+        const originalStart = candidate.startTime.toDate();
+        const direction: ProposalType = specificTime.getTime() < originalStart.getTime() ? 'anticipo' : specificTime.getTime() > originalStart.getTime() ? 'posticipo' : 'cambio';
+        return { userId: candidate.customerId, appointmentId: candidate.id!, status: idx === 0 ? 'pending' : 'waiting' as any, notifiedAt: idx === 0 ? Timestamp.now() : null, expiresAt: idx === 0 ? Timestamp.fromDate(addMinutes(new Date(), 15)) : null, proposedStartTime: Timestamp.fromDate(specificTime), type: direction };
       });
       const proposalRef = await addDoc(collection(db, 'salons', tenantId, 'rescheduleProposals'), { gapStartTime: Timestamp.fromDate(showGapFiller.start), gapEndTime: Timestamp.fromDate(showGapFiller.end), gapAppointmentId: showGapFiller.appointmentId || '', targets, currentIdx: 0, status: 'active', createdAt: Timestamp.now() });
-      await addDoc(collection(db, 'salons', tenantId, 'notifications'), { userId: targets[0].userId, title: 'Proposta di Cambio Orario', message: `Il barbiere ti propone di anticipare il tuo appuntamento.`, type: 'reschedule_proposal', read: false, createdAt: Timestamp.now(), proposalId: proposalRef.id, appointmentId: selectedCandidates[0] });
+      const firstDirection = targets[0].type;
+      const directionText = firstDirection === 'posticipo' ? 'posticipare' : firstDirection === 'cambio' ? 'cambiare orario' : 'anticipare';
+      await addDoc(collection(db, 'salons', tenantId, 'notifications'), { userId: targets[0].userId, title: 'Proposta di Cambio Orario', message: `Il barbiere ti propone di ${directionText} il tuo appuntamento.`, type: 'reschedule_proposal', read: false, createdAt: Timestamp.now(), proposalId: proposalRef.id, appointmentId: selectedCandidates[0] });
       setGapWizardStep(3);
     } catch (error) {
       console.error(error);
@@ -247,7 +251,8 @@ export default function MonoBarberDashboard({ selectedAppointmentId, selectedNot
           notifiedAt: Timestamp.now(),
           expiresAt: Timestamp.fromDate(addMinutes(new Date(), 15)),
           proposedStartTime: Timestamp.fromDate(newStart),
-          proposedEndTime: Timestamp.fromDate(newEnd)
+          proposedEndTime: Timestamp.fromDate(newEnd),
+          type: direction
         }],
         currentIdx: 0,
         status: 'active',
@@ -399,7 +404,9 @@ export default function MonoBarberDashboard({ selectedAppointmentId, selectedNot
                     const candidate = rescheduleCandidates.find(c => c.id === id)!;
                     const phone = candidate.isForFriend ? candidate.friendDetails?.phone : candidate.customer?.phoneNumber;
                     const proposedTime = gapPlacements[id] || showGapFiller.start;
-                    const waLink = phone ? generateWhatsAppLink('reschedule_proposal_sent', getDisplayName(candidate), phone, format(proposedTime, 'dd/MM/yyyy'), format(proposedTime, 'HH:mm'), tenantId!) : null;
+                    const originalStart = candidate.startTime.toDate();
+                    const direction: ProposalType = proposedTime.getTime() < originalStart.getTime() ? 'anticipo' : proposedTime.getTime() > originalStart.getTime() ? 'posticipo' : 'cambio';
+                    const waLink = phone ? generateWhatsAppLink('reschedule_proposal_sent', getDisplayName(candidate), phone, format(proposedTime, 'dd/MM/yyyy'), format(proposedTime, 'HH:mm'), tenantId!, direction) : null;
 
                     return (
                       <div key={id} className="flex items-center justify-between p-4 bg-gray-50 rounded-xl border border-gray-100">
