@@ -483,10 +483,6 @@ export default function MonoBarberDashboard({ selectedAppointmentId, selectedNot
             const itemStart = item;
             const itemEnd = addHours(item, 1);
             
-            // 🚀 LAYOUT MOBILE PROPORZIONATO
-            const isMobile = typeof window !== 'undefined' && window.innerWidth < 640;
-            const baseWidth = isMobile ? 7 : 10;
-
             const overlappingApps = filteredAppointments.filter(a => {
               if (a.status === 'cancelled') return false;
               const appStart = a.startTime.toDate();
@@ -578,13 +574,12 @@ export default function MonoBarberDashboard({ selectedAppointmentId, selectedNot
                       {combinedItems.map((itemObj, idx) => {
                         if (itemObj.type === 'gap') {
                           const gapDur = itemObj.data.duration;
-                          const cWidth = (gapDur / 30) * baseWidth;
                           return (
                             <button 
                               key={`gap-${idx}`} 
                               onClick={() => findCandidatesForGap({ start: itemObj.data.start, end: itemObj.data.end })} 
-                              style={{ width: `${cWidth}rem`, maxWidth: '85vw', minWidth: '4.5rem' }} 
-                              className="shrink-0 h-[52px] bg-amber-50 border-2 border-dashed border-amber-300 text-amber-600 rounded-xl hover:bg-amber-100 transition-all flex flex-col items-center justify-center font-bold text-[11px]"
+                              style={{ flexGrow: gapDur / 30, flexShrink: 0, flexBasis: 0, minWidth: 0 }} 
+                              className="h-[52px] bg-amber-50 border-2 border-dashed border-amber-300 text-amber-600 rounded-xl hover:bg-amber-100 transition-all flex flex-col items-center justify-center font-bold text-[11px]"
                             >
                               <span className="text-amber-500 mb-0.5">+</span><span>{formatDurationText(gapDur)}</span>
                             </button>
@@ -600,7 +595,6 @@ export default function MonoBarberDashboard({ selectedAppointmentId, selectedNot
                         const effectiveEnd = isAfter(appEnd, itemEnd) ? itemEnd : appEnd;
                         const dur = (effectiveEnd.getTime() - effectiveStart.getTime()) / 60000;
                         
-                        const cWidth = (dur / 30) * baseWidth;
                         const phoneNum = app.isForFriend ? app.friendDetails?.phone : app.customer?.phoneNumber;
                         
                         const isCandidate = rescheduleCandidates.some(c => c.id === app.id);
@@ -611,7 +605,7 @@ export default function MonoBarberDashboard({ selectedAppointmentId, selectedNot
 
                         if (isSpillover) {
                           return (
-                            <div key={`${app.id}-spill`} style={{ width: `${cWidth}rem`, maxWidth: '85vw', minWidth: '4.5rem' }} className="shrink-0 h-[52px] bg-gray-100 border-2 border-dashed border-gray-300 rounded-xl flex items-center justify-center opacity-70">
+                            <div key={`${app.id}-spill`} style={{ flexGrow: dur / 30, flexShrink: 0, flexBasis: 0, minWidth: 0 }} className="h-[52px] bg-gray-100 border-2 border-dashed border-gray-300 rounded-xl flex items-center justify-center opacity-70">
                               <span className="text-[9px] sm:text-[10px] font-bold text-gray-400 uppercase text-center leading-tight">
                                 Continua<br/>{format(appEnd, 'HH:mm')}
                               </span>
@@ -630,9 +624,9 @@ export default function MonoBarberDashboard({ selectedAppointmentId, selectedNot
                                 setSelectedAppointment(app);
                               }
                             }} 
-                            style={{ width: `${cWidth}rem`, maxWidth: '85vw', minWidth: '12rem' }} 
+                            style={{ flexGrow: dur / 30, flexShrink: 0, flexBasis: 0, minWidth: 0 }} 
                             className={cn(
-                              "shrink-0 h-[60px] p-2.5 rounded-xl shadow-sm flex flex-col justify-between cursor-pointer transition-all border border-black/5 relative overflow-hidden group", 
+                              "h-[60px] p-2.5 rounded-xl shadow-sm flex flex-col justify-between cursor-pointer transition-all border border-black/5 relative overflow-hidden group", 
                               app.id === highlightedAppId ? "ring-2 ring-emerald-500 scale-[1.02]" : "hover:scale-[1.01]", 
                               selectionMode && !isCandidate && !isAdjacentNext && !isAdjacentPrev ? "opacity-30 grayscale" : "",
                               isSelected ? "bg-emerald-500 text-white ring-2 ring-emerald-500" :

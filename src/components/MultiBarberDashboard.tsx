@@ -553,9 +553,7 @@ export default function MultiBarberDashboard({ selectedAppointmentId, selectedNo
 
                       // 🚀 RENDERIZZAZIONE VISTA GIORNALIERA (Kanban Orario con Spillover)
                       const itemStart = item;
-                      const itemEnd = addHours(item, 1);
-                      const isMobile = typeof window !== 'undefined' && window.innerWidth < 640;
-                      const baseWidth = isMobile ? 8 : 14; 
+                      const itemEnd = addHours(item, 1); 
 
                       const overlappingApps = filteredAppointments.filter(a => {
                         if (a.status === 'cancelled') return false;
@@ -648,8 +646,8 @@ export default function MultiBarberDashboard({ selectedAppointmentId, selectedNo
                                     <button 
                                       key={`gap-${idx}`} 
                                       onClick={() => findCandidatesForGap({ start: itemObj.data.start, end: itemObj.data.end, staffId: staffObj?.uid })} 
-                                      style={{ maxWidth: '85vw' }}
-                                      className="flex-1 h-[52px] min-w-[80px] bg-amber-50/30 border-2 border-dashed border-amber-300/80 text-amber-600 rounded-xl hover:bg-amber-100/50 hover:border-amber-400 transition-all flex flex-col items-center justify-center font-bold text-[11px]"
+                                      style={{ flexGrow: gapDur / 30, flexShrink: 0, flexBasis: 0, minWidth: 0 }}
+                                      className="h-[52px] bg-amber-50/30 border-2 border-dashed border-amber-300/80 text-amber-600 rounded-xl hover:bg-amber-100/50 hover:border-amber-400 transition-all flex flex-col items-center justify-center font-bold text-[11px]"
                                     >
                                       <span className="text-amber-500 mb-0.5">+</span>
                                       <span>{formatDurationText(gapDur)}</span>
@@ -666,7 +664,6 @@ export default function MultiBarberDashboard({ selectedAppointmentId, selectedNo
                                 const effectiveEnd = isAfter(appEnd, itemEnd) ? itemEnd : appEnd;
                                 const dur = (effectiveEnd.getTime() - effectiveStart.getTime()) / 60000;
                                 
-                                const cWidth = (dur / 30) * baseWidth;
                                 const phoneNum = app.isForFriend ? app.friendDetails?.phone : app.customer?.phoneNumber;
                                 
                                 const isCandidate = rescheduleCandidates.some(c => c.id === app.id);
@@ -677,7 +674,7 @@ export default function MultiBarberDashboard({ selectedAppointmentId, selectedNo
                                 
                                 if (isSpillover) {
                                   return (
-                                    <div key={`${app.id}-spill`} style={{ width: `${cWidth}rem`, minWidth: '6rem', maxWidth: '85vw' }} className="shrink-0 h-[52px] bg-gray-100 border-2 border-dashed border-gray-300 rounded-xl flex items-center justify-center opacity-70">
+                                    <div key={`${app.id}-spill`} style={{ flexGrow: dur / 30, flexShrink: 0, flexBasis: 0, minWidth: 0 }} className="h-[52px] bg-gray-100 border-2 border-dashed border-gray-300 rounded-xl flex items-center justify-center opacity-70">
                                       <span className="text-[9px] sm:text-[10px] font-bold text-gray-400 uppercase text-center leading-tight">
                                         Continua<br/>{format(appEnd, 'HH:mm')}
                                       </span>
@@ -696,9 +693,9 @@ export default function MultiBarberDashboard({ selectedAppointmentId, selectedNo
                                         setSelectedAppointment(app);
                                       }
                                     }} 
-                                    style={{ width: `${cWidth}rem`, minWidth: '14rem', maxWidth: '85vw' }} 
+                                    style={{ flexGrow: dur / 30, flexShrink: 0, flexBasis: 0, minWidth: 0 }} 
                                     className={cn(
-                                      "shrink-0 h-[60px] p-2.5 rounded-xl shadow-sm flex flex-col justify-between cursor-pointer transition-all border border-black/5 relative overflow-hidden group", 
+                                      "h-[60px] p-2.5 rounded-xl shadow-sm flex flex-col justify-between cursor-pointer transition-all border border-black/5 relative overflow-hidden group", 
                                       app.id === highlightedAppId ? "ring-2 ring-emerald-500 scale-[1.02]" : "hover:scale-[1.01]", 
                                       selectionMode && !isCandidate && !isAdjacentNext && !isAdjacentPrev ? "opacity-30 grayscale" : "",
                                       isSelected ? "bg-emerald-500 text-white ring-2 ring-emerald-500" :
