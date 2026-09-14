@@ -84,7 +84,8 @@ export function calculateOptimalSlots(
   appointments: AppointmentRange[],
   shift: Shift,
   yieldConfig: YieldConfig, 
-  isManualBooking: boolean = false 
+  isManualBooking: boolean = false,
+  allowEverySlot: boolean = false 
 ): Date[] {
   const validSlots: Date[] = [];
   
@@ -150,6 +151,12 @@ export function calculateOptimalSlots(
         if (isAfter(addMinutes(slotStart, dur), windowEnd)) continue;
 
         if (isManualBooking) {
+          approved_D_eff = dur;
+          break;
+        }
+
+        // 🔧 Barbiere dedicato a servizi brevi (≤ 30 min): ogni fascia oraria è valida
+        if (allowEverySlot) {
           approved_D_eff = dur;
           break;
         }
@@ -291,13 +298,21 @@ export function calculateMultiStaffSlots(
       };
     });
 
+    // 🔧 Se il barbiere fa SOLO servizi brevi (≤ 30 min), rende disponibili tutti gli orari
+    const staffAllShort = (Array.isArray(staff.assignedServices) && staff.assignedServices.length > 0) &&
+      staff.assignedServices.every(id => {
+        const s = catalog.find(c => c.id === id);
+        return !!s && s.duration <= 30;
+      });
+
     const staffSlots = calculateOptimalSlots(
       requestedCombo,
       catalog,
       staffAppointments,
       shift,
       yieldConfig,
-      isManualBooking
+      isManualBooking,
+      staffAllShort
     );
 
     for (const slot of staffSlots) {
