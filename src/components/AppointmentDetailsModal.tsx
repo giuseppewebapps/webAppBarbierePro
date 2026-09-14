@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { doc, updateDoc, Timestamp, addDoc, collection } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Appointment, UserProfile, StaffProfile, SalonPublicSettings } from '../types';
@@ -29,6 +29,13 @@ export default function AppointmentDetailsModal({
   const [savingCustomer, setSavingCustomer] = useState(false);
   const [showContactMenu, setShowContactMenu] = useState(false);
   const [editCustomerForm, setEditCustomerForm] = useState({ firstName: '', lastName: '', phone: '', email: '' });
+  // 🚀 Barbiere selezionato nel dropdown (state locale: evita che il select resti sul valore obsoleto)
+  const [assignedStaffId, setAssignedStaffId] = useState<string>(appointment.staffId || '');
+
+  // Mantiene lo state in sync se il prop dell'appuntamento viene aggiornato dal parent
+  useEffect(() => {
+    setAssignedStaffId(appointment.staffId || '');
+  }, [appointment.staffId]);
 
   const getDisplayName = (app: Appointment & { customer?: UserProfile }) => {
     if (app.isForFriend) return `${app.friendDetails?.firstName || ''} ${app.friendDetails?.lastName || ''}`.trim() || 'Amico';
@@ -81,13 +88,14 @@ export default function AppointmentDetailsModal({
   };
 
   const handleReassignStaff = async (newStaffId: string) => {
-    if (newStaffId === appointment.staffId) return;
+    if (newStaffId === assignedStaffId) return;
     const newStaff = staffMembers.find(s => s.uid === newStaffId);
     if (!newStaff) return;
 
     const canDoAll = appointment.services.map(s => s.id).every(id => newStaff.assignedServices.includes(id));
     if (!canDoAll) {
       alert(`⚠️ ${newStaff.displayName} non esegue tutti i servizi previsti per questo appuntamento.`);
+      setAssignedStaffId(appointment.staffId || '');
       return;
     }
 
@@ -103,6 +111,7 @@ export default function AppointmentDetailsModal({
 
     if (hasOverlap) {
       alert(`⚠️ Impossibile spostare: ${newStaff.displayName} ha già un altro appuntamento in questa fascia oraria!`);
+      setAssignedStaffId(appointment.staffId || '');
       return;
     }
 
@@ -111,8 +120,10 @@ export default function AppointmentDetailsModal({
         staffId: newStaffId, 
         updatedAt: Timestamp.now() 
       });
+      setAssignedStaffId(newStaffId);
     } catch (error) {
       alert("Errore durante lo spostamento.");
+      setAssignedStaffId(appointment.staffId || '');
     }
   };
 
@@ -174,7 +185,7 @@ export default function AppointmentDetailsModal({
           {salonSettings?.hasMultiStaff && staffMembers.length > 0 && appointment.status === 'booked' && !isBefore(appointment.endTime.toDate(), currentTime) && (
             <div className="p-4 bg-blue-50/50 rounded-2xl border border-blue-100 relative">
               <label className="text-[10px] font-bold text-blue-800 uppercase tracking-widest mb-2 flex items-center gap-1"><Users size={12} /> Operatore Assegnato</label>
-              <select value={appointment.staffId || ''} onChange={(e) => handleReassignStaff(e.target.value)} className="w-full p-3 bg-white border border-blue-200 rounded-xl text-sm font-bold text-blue-900 outline-none cursor-pointer">
+              <select value={assignedStaffId} onChange={(e) => { setAssignedStaffId(e.target.value); handleReassignStaff(e.target.value); }} className="w-full p-3 bg-white border border-blue-200 rounded-xl text-sm font-bold text-blue-900 outline-none cursor-pointer">
                 {!appointment.staffId && <option value="" disabled>Da Assegnare</option>}
                 {staffMembers.map(staff => <option key={staff.uid} value={staff.uid}>{staff.displayName}</option>)}
               </select>
