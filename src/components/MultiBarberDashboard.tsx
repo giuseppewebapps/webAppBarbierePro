@@ -8,6 +8,7 @@ import { it } from 'date-fns/locale';
 import { Calendar as CalendarIcon, Phone, Clock, XCircle, ChevronLeft, ChevronRight, Check, AlertCircle, Send, CheckCircle2, MessageCircle, ArrowUpCircle, Search } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useSalonSettings } from '../hooks/useSalonSettings';
+import { useIsOwner } from '../hooks/useIsOwner';
 import { generateWhatsAppLink } from '../utils/whatsapp';
 import { cn } from '../lib/utils';
 
@@ -53,7 +54,7 @@ export default function MultiBarberDashboard({ selectedAppointmentId, selectedNo
   const tomorrowsAppointments = appointments.filter(app => isSameDay(app.startTime.toDate(), tomorrow) && app.status === 'booked').sort((a, b) => a.startTime.toMillis() - b.startTime.toMillis());
 
   // 🚀 RBAC
-  const isOwner = staffMembers.length === 0 || staffMembers.find(s => s.uid === profile?.uid)?.role === 'owner';
+  const { isOwner } = useIsOwner();
 
   // 🚀 FORZA SCELTA SINGOLO BARBIERE SE VISTA SETTIMANALE O MENSILE
   useEffect(() => {

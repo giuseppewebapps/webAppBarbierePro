@@ -10,21 +10,20 @@ import { cn } from '../lib/utils';
 import { SpecialDay, Appointment, StaffProfile } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { useSalonSettings } from '../hooks/useSalonSettings';
+import { useIsOwner } from '../hooks/useIsOwner';
 
 interface Props {
   onClose: () => void;
 }
 
 export default function ScheduleMaintenanceModal({ onClose }: Props) {
-  const { profile, tenantId } = useAuth(); // 🚀 Estratto 'profile' per la sicurezza
+  const { tenantId } = useAuth();
   const { settings: salonSettings } = useSalonSettings(tenantId);
+  const { isOwner, loading: ownerLoading } = useIsOwner();
 
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const [isClosed, setIsClosed] = useState(false);
   const [loading, setLoading] = useState(false);
-  
-  // 🚀 RBAC: Stato del Lucchetto di Sicurezza
-  const [accessDenied, setAccessDenied] = useState(false);
   
   const [staffMembers, setStaffMembers] = useState<StaffProfile[]>([]);
   const [targetStaffId, setTargetStaffId] = useState<string | 'all'>('all');
@@ -49,35 +48,23 @@ export default function ScheduleMaintenanceModal({ onClose }: Props) {
     return options;
   }, []);
 
-  // 🚀 CONTROLLO DI SICUREZZA (RBAC) E CARICAMENTO STAFF
+  // 🚀 CARICAMENTO STAFF (solo per il selettore di destinazione in multi-staff)
   useEffect(() => {
-    if (!tenantId || !profile) return;
+    if (!tenantId) return;
 
     if (salonSettings?.hasMultiStaff) {
       const fetchStaff = async () => {
         const snap = await getDocs(query(collection(db, 'salons', tenantId, 'staff'), where('active', '==', true)));
-        const staff = snap.docs.map(d => d.data() as StaffProfile).sort((a, b) => a.order - b.order);
-        setStaffMembers(staff);
-
-        // Se l'utente non è il titolare, bloccagli l'accesso al modale
-        const isOwner = staff.length === 0 || staff.find(s => s.uid === profile.uid)?.role === 'owner';
-        if (!isOwner) {
-          setAccessDenied(true);
-        }
+        setStaffMembers(snap.docs.map(d => d.data() as StaffProfile).sort((a, b) => a.order - b.order));
       };
       fetchStaff();
-    } else {
-      // In modalità mono-postazione
-      if (profile.role && profile.role !== 'owner') {
-        setAccessDenied(true);
-      }
     }
-  }, [tenantId, salonSettings?.hasMultiStaff, profile]);
+  }, [tenantId, salonSettings?.hasMultiStaff]);
 
   // Caricamento Dati Giorno
   useEffect(() => {
     const fetchException = async () => {
-      if (!tenantId || accessDenied) return;
+      if (!tenantId) return;
       const dateString = format(selectedDate, 'yyyy-MM-dd');
       
       const docId = targetStaffId === 'all' ? dateString : `${dateString}_${targetStaffId}`;
@@ -106,7 +93,7 @@ export default function ScheduleMaintenanceModal({ onClose }: Props) {
       }
     };
     fetchException();
-  }, [selectedDate, tenantId, targetStaffId, accessDenied]);
+  }, [selectedDate, tenantId, targetStaffId]);
 
   const handleSave = async () => {
     if (!tenantId) return;
@@ -206,8 +193,9 @@ export default function ScheduleMaintenanceModal({ onClose }: Props) {
     }
   };
 
-  // 🚀 INTERFACCIA DI BLOCCO SE L'UTENTE NON È AUTORIZZATO
-  if (accessDenied) {
+  // 🚀 GATE RBAC: solo il Titolare può modificare gli orari
+  if (ownerLoading) return null;
+  if (!isOwner) {
     return (
       <div className="fixed inset-0 z-[150] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
         <div className="bg-white rounded-[32px] p-8 max-w-sm w-full text-center shadow-2xl relative overflow-hidden">
@@ -227,7 +215,7 @@ export default function ScheduleMaintenanceModal({ onClose }: Props) {
     );
   }
 
-  // Interfaccia standard per l'Owner
+  // 🚀 INTERFACCIA STANDARD
   return (
     <div className="fixed inset-0 z-[150] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in">
       <div className="bg-white rounded-[32px] w-full max-w-lg max-h-[90vh] overflow-y-auto shadow-2xl flex flex-col">

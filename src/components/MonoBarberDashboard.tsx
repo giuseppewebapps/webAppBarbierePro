@@ -8,6 +8,7 @@ import { it } from 'date-fns/locale';
 import { Calendar as CalendarIcon, Phone, Clock, XCircle, AlertCircle, ChevronLeft, ChevronRight, Check, Send, CheckCircle2, MessageCircle, ArrowUpCircle, Search } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useSalonSettings } from '../hooks/useSalonSettings';
+import { useIsOwner } from '../hooks/useIsOwner';
 import { generateWhatsAppLink } from '../utils/whatsapp';
 import { cn } from '../lib/utils';
 
@@ -51,7 +52,7 @@ export default function MonoBarberDashboard({ selectedAppointmentId, selectedNot
   const tomorrowsAppointments = appointments.filter(app => isSameDay(app.startTime.toDate(), tomorrow) && app.status === 'booked').sort((a, b) => a.startTime.toMillis() - b.startTime.toMillis());
 
   // 🚀 RBAC
-  const isOwner = profile?.role === 'owner' || true;
+  const { isOwner } = useIsOwner();
 
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 60000);
