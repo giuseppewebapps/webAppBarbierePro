@@ -58,6 +58,11 @@ import { YieldConfig, StaffProfile, Service as AppService } from '../types';
  *      viene considerato un blocco globale e disabilita tutti i barbieri per quella frazione.
  *    - Short-Circuiting: Restituisce un singolo slot univoco alla UI appena trova il primo 
  *      barbiere libero, evitando di renderizzare slot duplicati al cliente.
+ * 8. CADENZA DINAMICA DEGLI SLOT:
+ *    - Servizio FLESSIBILE (flexibility > 0) → griglia fissa di 15 minuti (per sfruttare gli incastri)
+ *    - Servizio RIGIDO (flexibility = 0) → slot distanziati della durata nominale del servizio
+ *     (es. servizio da 20 min → proposte ogni 20 minuti, a partire dall'inizio di ogni finestra libera)    
+ *    - Se il barbiere fa SOLO servizi brevi (≤ 30 min), rende disponibili tutti gli orari   
  * ============================================================================
  */
 
@@ -227,7 +232,12 @@ export function calculateOptimalSlots(
         validSlots.push(new Date(slotStart));
       }
 
-      slotStart = addMinutes(slotStart, 15);
+      // 🚀 CADENZA DINAMICA DEGLI SLOT:
+      // - Servizio FLESSIBILE (flexibility > 0) → griglia fissa di 15 minuti (per sfruttare gli incastri)
+      // - Servizio RIGIDO (flexibility = 0) → slot distanziati della durata nominale del servizio
+      //   (es. servizio da 20 min → proposte ogni 20 minuti, a partire dall'inizio di ogni finestra libera)
+      const scanStep = requestedService.flexibility > 0 ? 15 : Math.max(D_req, 1);
+      slotStart = addMinutes(slotStart, scanStep);
     }
   }
 
@@ -298,7 +308,7 @@ export function calculateMultiStaffSlots(
       };
     });
 
-    // 🔧 Se il barbiere fa SOLO servizi brevi (≤ 30 min), rende disponibili tutti gli orari
+    // Se il barbiere fa SOLO servizi brevi (≤ 30 min), rende disponibili tutti gli orari
     const staffAllShort = (Array.isArray(staff.assignedServices) && staff.assignedServices.length > 0) &&
       staff.assignedServices.every(id => {
         const s = catalog.find(c => c.id === id);
