@@ -955,6 +955,9 @@ export default function CustomerBooking({
           newEndTime = new Date(newStartTime.getTime() + duration);
         }
 
+        // Barbiere di destinazione: quello del buco se proposto, altrimenti quello originario
+        const targetStaffId = currentTarget.proposedStaffId || myApp.staffId || undefined;
+
         const conflictQuery = query(
           collection(db, 'salons', tenantId, 'appointments'),
           where('status', '==', 'booked'),
@@ -962,14 +965,14 @@ export default function CustomerBooking({
           where('endTime', '>', Timestamp.fromDate(newStartTime))
         );
         const conflictSnap = await getDocs(conflictQuery);
-        // Filtra considerando la colonna del barbiere, se presente
+        // Filtra considerando la colonna del barbiere target (il buco scelto dal barbiere)
         const realConflicts = conflictSnap.docs.filter(d => {
           if (d.id === currentTarget.appointmentId) return false;
           const conflictApp = d.data() as Appointment;
-          // Se l'appuntamento storico non ha staff, blocca sempre
-          if (!conflictApp.staffId) return true;
-          // Se ha staff, è conflitto solo se è lo stesso barbiere
-          return conflictApp.staffId === myApp.staffId;
+          // Senza barbiere target noto (dataset legacy): blocco solo se anche il sovrapposto è senza staffId
+          if (!targetStaffId) return !conflictApp.staffId;
+          // Con barbiere target noto: conflitto SOLO se è proprio la colonna del barbiere di destinazione
+          return !!conflictApp.staffId && conflictApp.staffId === targetStaffId;
         });
         
         if (realConflicts.length > 0) {
@@ -981,12 +984,23 @@ export default function CustomerBooking({
           return; 
         }
 
-        await updateDoc(doc(db, 'salons', tenantId, 'appointments', currentTarget.appointmentId), {
+        // Aggiorna l'appuntamento; se il buco prevede un cambio barbiere, riassegna lo staffId
+        const updatePayload: {
+          startTime: any;
+          endTime: any;
+          status: string;
+          updatedAt: any;
+          staffId?: string;
+        } = {
           startTime: Timestamp.fromDate(newStartTime),
           endTime: Timestamp.fromDate(newEndTime),
           status: 'booked',
           updatedAt: Timestamp.now()
-        });
+        };
+        if (currentTarget.proposedStaffId) {
+          updatePayload.staffId = currentTarget.proposedStaffId;
+        }
+        await updateDoc(doc(db, 'salons', tenantId, 'appointments', currentTarget.appointmentId), updatePayload);
 
         if (freshProposal.gapAppointmentId) {
           try {
@@ -1322,6 +1336,27 @@ export default function CustomerBooking({
                       </div>
                     </div>
                   </div>
+
+                  {/* 🔔 Avviso cambio barbiere (proposta cross-staff) */}
+                  {selectedProposal.targets[selectedProposal.currentIdx].proposedStaffId && (() => {
+                    const appId = selectedProposal.targets[selectedProposal.currentIdx].appointmentId;
+                    const origStaffId = myAppointments.find(a => a.id === appId)?.staffId;
+                    const newStaffId = selectedProposal.targets[selectedProposal.currentIdx].proposedStaffId;
+                    if (!origStaffId || origStaffId === newStaffId) return null;
+                    const origName = staffMembers.find(s => s.uid === origStaffId)?.displayName || 'Barbiere';
+                    const newName = staffMembers.find(s => s.uid === newStaffId)?.displayName || 'Barbiere';
+                    return (
+                      <div className="p-4 bg-amber-50 rounded-2xl border border-amber-200 flex items-start gap-3">
+                        <Users size={18} className="text-amber-600 mt-0.5 shrink-0" />
+                        <div>
+                          <div className="text-xs font-bold text-amber-700 uppercase tracking-widest">Cambio barbiere</div>
+                          <p className="text-sm text-amber-800">
+                            Con questo spostamento sarai seguito da <strong>{newName}</strong> al posto di <strong>{origName}</strong>.
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  })()}
 
                   <div className="space-y-3">
                     <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Servizi Prenotati</div>

@@ -88,6 +88,7 @@ export interface RescheduleProposal {
     proposedStartTime: any;
     proposedEndTime?: any;
     type?: ProposalType; // 🚀 NUOVO: tipo di proposta (anticipo/posticipo/cambio)
+    proposedStaffId?: string; // Barbiere di destinazione (buco) per la riassegnazione
   }[];
   currentIdx: number;
   status: 'active' | 'completed' | 'cancelled';
