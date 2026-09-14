@@ -85,6 +85,7 @@ export interface RescheduleProposal {
     expiresAt?: any;
     proposedStartTime: any;
     proposedEndTime?: any;
+    proposedStaffId?: string; // Barbiere di destinazione (buco) per la riassegnazione
   }[];
   currentIdx: number;
   status: 'active' | 'completed' | 'cancelled';

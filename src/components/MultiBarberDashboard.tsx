@@ -194,7 +194,7 @@ export default function MultiBarberDashboard({ selectedAppointmentId, selectedNo
 
     const candidates = appointments.filter(app => {
       const appDur = (app.endTime.toDate().getTime() - app.startTime.toDate().getTime()) / 60000;
-      return app.status === 'booked' && isAfter(app.startTime.toDate(), addMinutes(currentTime, 30)) && appDur <= gapDuration && app.id !== expandedGap.appointmentId && (!clickedGap.staffId || app.staffId === clickedGap.staffId);
+      return app.status === 'booked' && isAfter(app.startTime.toDate(), addMinutes(currentTime, 30)) && appDur <= gapDuration && app.id !== expandedGap.appointmentId;
     }).sort((a, b) => a.startTime.toMillis() - b.startTime.toMillis());
     
     setRescheduleCandidates(candidates);
@@ -216,7 +216,7 @@ export default function MultiBarberDashboard({ selectedAppointmentId, selectedNo
       const targets = selectedCandidates.map((id, idx) => {
         const candidate = rescheduleCandidates.find(c => c.id === id)!;
         const specificTime = gapPlacements[id] || showGapFiller.start; 
-        return { userId: candidate.customerId, appointmentId: candidate.id!, status: idx === 0 ? 'pending' : 'waiting' as any, notifiedAt: idx === 0 ? Timestamp.now() : null, expiresAt: idx === 0 ? Timestamp.fromDate(addMinutes(new Date(), 15)) : null, proposedStartTime: Timestamp.fromDate(specificTime) };
+        return { userId: candidate.customerId, appointmentId: candidate.id!, status: idx === 0 ? 'pending' : 'waiting' as any, notifiedAt: idx === 0 ? Timestamp.now() : null, expiresAt: idx === 0 ? Timestamp.fromDate(addMinutes(new Date(), 15)) : null, proposedStartTime: Timestamp.fromDate(specificTime), proposedStaffId: showGapFiller.staffId || undefined };
       });
       const proposalRef = await addDoc(collection(db, 'salons', tenantId, 'rescheduleProposals'), { gapStartTime: Timestamp.fromDate(showGapFiller.start), gapEndTime: Timestamp.fromDate(showGapFiller.end), gapAppointmentId: showGapFiller.appointmentId || '', targets, currentIdx: 0, status: 'active', createdAt: Timestamp.now() });
       await addDoc(collection(db, 'salons', tenantId, 'notifications'), { userId: targets[0].userId, title: 'Proposta di Cambio Orario', message: `Il barbiere ti propone di anticipare il tuo appuntamento.`, type: 'reschedule_proposal', read: false, createdAt: Timestamp.now(), proposalId: proposalRef.id, appointmentId: selectedCandidates[0] });
@@ -270,7 +270,8 @@ export default function MultiBarberDashboard({ selectedAppointmentId, selectedNo
           notifiedAt: Timestamp.now(),
           expiresAt: Timestamp.fromDate(addMinutes(new Date(), 15)),
           proposedStartTime: Timestamp.fromDate(newStart),
-          proposedEndTime: Timestamp.fromDate(newEnd)
+          proposedEndTime: Timestamp.fromDate(newEnd),
+          proposedStaffId: showGapFiller.staffId || undefined
         }],
         currentIdx: 0,
         status: 'active',
