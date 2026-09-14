@@ -192,6 +192,9 @@ export default function MultiBarberDashboard({ selectedAppointmentId, selectedNo
     const expandedGap = { ...clickedGap, end: trueEnd };
     const gapDuration = (trueEnd.getTime() - clickedGap.start.getTime()) / 60000;
 
+    // 🚀 GUARDIA: buchi a durata zero o negativa (es. oltre la chiusura) non aprono il wizard
+    if (gapDuration <= 0) return;
+
     const candidates = appointments.filter(app => {
       const appDur = (app.endTime.toDate().getTime() - app.startTime.toDate().getTime()) / 60000;
       return app.status === 'booked' && isAfter(app.startTime.toDate(), addMinutes(currentTime, 30)) && appDur <= gapDuration && app.id !== expandedGap.appointmentId;
@@ -263,6 +266,22 @@ export default function MultiBarberDashboard({ selectedAppointmentId, selectedNo
         newStart = addMinutes(newEnd, -nominalDuration); 
       }
 
+      // 🚀 VALIDAZIONE DIREZIONE: un posticipo proporrà SEMPRE un orario successivo,
+      // un anticipo SEMPRE precedente (fix: niente più "posticipo" che anticipa)
+      const originalStartTime = candidateApp.startTime.toDate();
+      if (direction === 'posticipo' && !isAfter(newStart, originalStartTime)) {
+        alert("Impossibile posticipare: lo spazio disponibile non è sufficiente per questo appuntamento.");
+        setShiftConfirm(null);
+        setSendingProposal(false);
+        return;
+      }
+      if (direction === 'anticipo' && !isBefore(newStart, originalStartTime)) {
+        alert("Impossibile anticipare: lo spazio disponibile non è sufficiente per questo appuntamento.");
+        setShiftConfirm(null);
+        setSendingProposal(false);
+        return;
+      }
+
       const proposalData: Partial<RescheduleProposal> = {
         gapStartTime: Timestamp.fromDate(showGapFiller.start),
         gapEndTime: Timestamp.fromDate(showGapFiller.end),
@@ -314,8 +333,17 @@ export default function MultiBarberDashboard({ selectedAppointmentId, selectedNo
   };
 
   // 🚀 CALCOLO DINAMICO DELLE CELLE
+  // 🚀 La griglia giornaliera termina con l'ultima riga che CONTIENE la chiusura: mai righe intere oltre la chiusura
   const calendarItems = viewMode === 'daily' 
-    ? eachHourOfInterval({ start: setHours(startOfDay(selectedDate), 8), end: setHours(startOfDay(selectedDate), 20) })
+    ? (() => {
+        const dateString = format(selectedDate, 'yyyy-MM-dd');
+        const dayOfWeek = getDay(selectedDate);
+        const ex = specialDays.find(e => e.date === dateString);
+        const shifts = (ex && !ex.isClosed) ? (ex.openingHours || salonSettings?.weeklySchedule[dayOfWeek]?.shifts || []) : ((!ex && salonSettings?.weeklySchedule[dayOfWeek]?.isOpen) ? (salonSettings.weeklySchedule[dayOfWeek]?.shifts || []) : []);
+        const startH = shifts.length > 0 ? Math.floor(Math.min(...shifts.map(h => h.start))) : 8;
+        const endH = shifts.length > 0 ? Math.max(startH, Math.ceil(Math.max(...shifts.map(h => h.end))) - 1) : 19;
+        return eachHourOfInterval({ start: setHours(startOfDay(selectedDate), startH), end: setHours(startOfDay(selectedDate), endH) });
+      })()
     : eachDayOfInterval({ 
         start: startOfWeek(selectedDate, { weekStartsOn: 1 }), 
         end: viewMode === 'weekly' 
@@ -498,7 +526,7 @@ export default function MultiBarberDashboard({ selectedAppointmentId, selectedNo
               if (activeMobileTab !== 'all' && staffObj?.uid !== activeMobileTab) return null;
 
               return (
-                <div key={staffObj?.uid || 'mono'} className="flex-1 flex flex-col min-w-[300px] max-w-full">
+                <div key={staffObj?.uid || 'mono'} className="flex-1 flex flex-col min-w-[240px] sm:min-w-[280px] md:min-w-[300px] max-w-full">
                   <div className="h-12 border-b border-gray-100 bg-gray-50 flex items-center justify-center gap-2 sticky top-0 z-10">
                     <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: staffObj?.color || '#000' }} />
                     <span className="font-bold text-sm">{staffObj?.displayName || 'Salone'}</span>
@@ -525,6 +553,9 @@ export default function MultiBarberDashboard({ selectedAppointmentId, selectedNo
                                   const appStart = app.startTime.toDate();
                                   const appEnd = app.endTime.toDate();
                                   const phoneNum = app.isForFriend ? app.friendDetails?.phone : app.customer?.phoneNumber;
+                                  // 🚀 Badge FLEX: durata reale < somma durate nominali dei servizi
+                                  const nominalDuration = app.services.reduce((acc, s) => acc + s.duration, 0);
+                                  const isFlex = ((app.endTime.toDate().getTime() - app.startTime.toDate().getTime()) / 60000) < nominalDuration;
                                   
                                   return (
                                     <div 
@@ -540,7 +571,10 @@ export default function MultiBarberDashboard({ selectedAppointmentId, selectedNo
                                           <span>{format(appEnd, 'HH:mm')}</span>
                                         </div>
                                       </div>
-                                      <div className="text-[9px] opacity-70 truncate mt-1.5">{app.services.map(s => s.name).join(', ')}</div>
+                                      <div className="flex items-center gap-1 mt-1.5 min-w-0">
+                                        {isFlex && <span className="shrink-0 text-[8px] font-black bg-amber-400 text-black px-1.5 py-0.5 rounded-full">⚡ FLEX</span>}
+                                        <div className="text-[9px] opacity-70 truncate">{app.services.map(s => s.name).join(', ')}</div>
+                                      </div>
                                       {phoneNum && <div className="text-[9px] opacity-60 flex items-center gap-1 mt-1"><Phone size={8}/> {phoneNum}</div>}
                                     </div>
                                   )
@@ -600,25 +634,48 @@ export default function MultiBarberDashboard({ selectedAppointmentId, selectedNo
                       });
 
                       if (!isBreak && !searchTerm && salonSettings?.weeklySchedule) {
-                        let currentMarker = itemStart;
-                        const sortedApps = [...allOverlappingApps].sort((a,b) => a.startTime.toMillis() - b.startTime.toMillis());
+                        // 🚀 CLAMPING AI TURNI: i buchi esistono SOLO dentro l'orario di apertura
+                        // (fix: niente più "+1h" fantasma dopo la chiusura, es. fascia 20:00-21:00 con chiusura alle 20:00)
+                        const dateString = format(selectedDate, 'yyyy-MM-dd');
+                        const dayOfWeek = getDay(selectedDate);
+                        const exception = specialDays.find(ex => ex.date === dateString && (!ex.staffId || ex.staffId === staffObj?.uid));
 
-                        sortedApps.forEach(app => {
-                          const appStart = app.startTime.toDate();
-                          const appEnd = app.endTime.toDate();
-                          const effectiveStart = isBefore(appStart, itemStart) ? itemStart : appStart;
-                          const effectiveEnd = isAfter(appEnd, itemEnd) ? itemEnd : appEnd;
+                        let activeHours: TimeRange[] = (exception && !exception.isClosed) ? (exception.openingHours || salonSettings.weeklySchedule[dayOfWeek]?.shifts || []) : ((!exception && salonSettings.weeklySchedule[dayOfWeek]?.isOpen) ? salonSettings.weeklySchedule[dayOfWeek].shifts : []);
 
-                          if (isBefore(currentMarker, effectiveStart)) {
-                            const dur = (effectiveStart.getTime() - currentMarker.getTime()) / 60000;
-                            if (dur >= 15 && isAfter(currentMarker, addMinutes(currentTime, 30))) gapsForThisItem.push({ start: currentMarker, end: effectiveStart, duration: dur });
-                          }
-                          if (isAfter(effectiveEnd, currentMarker)) currentMarker = effectiveEnd;
+                        const nowPlus30 = addMinutes(currentTime, 30);
+
+                        const currentShift = activeHours.find(range => {
+                          const sStart = setMinutes(setHours(startOfDay(selectedDate), Math.floor(range.start)), Math.round((range.start - Math.floor(range.start)) * 60));
+                          const sEnd = setMinutes(setHours(startOfDay(selectedDate), Math.floor(range.end)), Math.round((range.end - Math.floor(range.end)) * 60));
+                          return isBefore(itemStart, sEnd) && isAfter(itemEnd, sStart);
                         });
 
-                        if (isBefore(currentMarker, itemEnd)) {
-                          const dur = (itemEnd.getTime() - currentMarker.getTime()) / 60000;
-                          if (dur >= 15 && isAfter(currentMarker, addMinutes(currentTime, 30))) gapsForThisItem.push({ start: currentMarker, end: itemEnd, duration: dur });
+                        if (currentShift) {
+                          const shiftStart = setMinutes(setHours(startOfDay(selectedDate), Math.floor(currentShift.start)), Math.round((currentShift.start - Math.floor(currentShift.start)) * 60));
+                          const shiftEnd = setMinutes(setHours(startOfDay(selectedDate), Math.floor(currentShift.end)), Math.round((currentShift.end - Math.floor(currentShift.end)) * 60));
+
+                          let currentMarker = isBefore(itemStart, shiftStart) ? shiftStart : itemStart;
+                          const realSlotEnd = isAfter(itemEnd, shiftEnd) ? shiftEnd : itemEnd;
+
+                          const sortedApps = [...allOverlappingApps].sort((a,b) => a.startTime.toMillis() - b.startTime.toMillis());
+
+                          sortedApps.forEach(app => {
+                            const appStart = app.startTime.toDate();
+                            const appEnd = app.endTime.toDate();
+                            const effectiveStart = isBefore(appStart, itemStart) ? itemStart : appStart;
+                            const effectiveEnd = isAfter(appEnd, itemEnd) ? itemEnd : appEnd;
+
+                            if (isBefore(currentMarker, effectiveStart)) {
+                              const dur = (effectiveStart.getTime() - currentMarker.getTime()) / 60000;
+                              if (dur >= 15 && isAfter(currentMarker, nowPlus30)) gapsForThisItem.push({ start: currentMarker, end: effectiveStart, duration: dur });
+                            }
+                            if (isAfter(effectiveEnd, currentMarker)) currentMarker = effectiveEnd;
+                          });
+
+                          if (isBefore(currentMarker, realSlotEnd)) {
+                            const dur = (realSlotEnd.getTime() - currentMarker.getTime()) / 60000;
+                            if (dur >= 15 && isAfter(currentMarker, nowPlus30)) gapsForThisItem.push({ start: currentMarker, end: realSlotEnd, duration: dur });
+                          }
                         }
                       }
 
@@ -628,7 +685,10 @@ export default function MultiBarberDashboard({ selectedAppointmentId, selectedNo
                       ].sort((a, b) => a.start.getTime() - b.start.getTime());
 
                       return (
-                        <div key={item.toISOString()} className={cn("h-[68px] border-b border-gray-50/50 p-1 flex gap-2 items-center overflow-hidden", isBreak && "bg-gray-50/50")}>
+                        <div key={item.toISOString()} className={cn("h-[68px] border-b border-gray-50/50 p-1 flex gap-2 items-center overflow-hidden relative", isBreak && "bg-gray-50/50")}>
+                          {isSameDay(selectedDate, currentTime) && isBefore(addHours(item, 1), currentTime) && (
+                            <div className="absolute inset-0 bg-gray-200/30 backdrop-grayscale-[0.5] z-10 pointer-events-none" />
+                          )}
                           {isBreak ? (
                             <div className="w-full text-center text-gray-300 text-[10px] font-bold uppercase tracking-widest italic">PAUSA SALONE</div>
                           ) : (
@@ -666,11 +726,17 @@ export default function MultiBarberDashboard({ selectedAppointmentId, selectedNo
                                 
                                 const phoneNum = app.isForFriend ? app.friendDetails?.phone : app.customer?.phoneNumber;
                                 
+                                // 🚀 Badge FLEX: l'appuntamento usa la flessibilità (durata reale < nominale)
+                                const nominalDuration = app.services.reduce((acc, s) => acc + s.duration, 0);
+                                const actualDuration = (app.endTime.toDate().getTime() - app.startTime.toDate().getTime()) / 60000;
+                                const isFlex = actualDuration < nominalDuration;
+
                                 const isCandidate = rescheduleCandidates.some(c => c.id === app.id);
                                 const isSelected = selectedCandidates.includes(app.id!);
                                 const selectionMode = showGapFiller !== null;
-                                const isAdjacentNext = selectionMode && Math.abs(appStart.getTime() - showGapFiller.end.getTime()) < 60000;
-                                const isAdjacentPrev = selectionMode && Math.abs(appEnd.getTime() - showGapFiller.start.getTime()) < 60000;
+                                // 🚀 GUARDIA: proposte anticipo/posticipo solo su buchi reali (durata > 0)
+                                const isAdjacentNext = !!showGapFiller && isAfter(showGapFiller.end, showGapFiller.start) && Math.abs(appStart.getTime() - showGapFiller.end.getTime()) < 60000;
+                                const isAdjacentPrev = !!showGapFiller && isAfter(showGapFiller.end, showGapFiller.start) && Math.abs(appEnd.getTime() - showGapFiller.start.getTime()) < 60000;
                                 
                                 if (isSpillover) {
                                   return (
@@ -724,8 +790,11 @@ export default function MultiBarberDashboard({ selectedAppointmentId, selectedNo
                                       </div>
                                     </div>
                                     <div className="flex justify-between items-end mt-1">
-                                      <div className="text-[9px] opacity-70 truncate max-w-[60%]">{app.services.map(s => s.name).join(', ')}</div>
-                                      {phoneNum && <div className="text-[9px] opacity-60 flex items-center gap-1"><Phone size={8}/> {phoneNum}</div>}
+                                      <div className="flex items-center gap-1 min-w-0 flex-1">
+                                        {isFlex && <span className="shrink-0 text-[8px] font-black bg-amber-400 text-black px-1.5 py-0.5 rounded-full">⚡ FLEX</span>}
+                                        <div className="text-[9px] opacity-70 truncate">{app.services.map(s => s.name).join(', ')}</div>
+                                      </div>
+                                      {phoneNum && <div className="text-[9px] opacity-60 flex items-center gap-1 shrink-0"><Phone size={8}/> {phoneNum}</div>}
                                     </div>
                                     
                                     {isSelected && (
