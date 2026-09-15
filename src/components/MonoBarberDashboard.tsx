@@ -240,6 +240,22 @@ export default function MonoBarberDashboard({ selectedAppointmentId, selectedNot
         newStart = addMinutes(newEnd, -nominalDuration); 
       }
 
+      // 🚀 VALIDAZIONE DIREZIONE: un posticipo proporrà SEMPRE un orario successivo,
+      // un anticipo SEMPRE precedente (fix: niente più "posticipo" che anticipa)
+      const originalStartTime = candidateApp.startTime.toDate();
+      if (direction === 'posticipo' && !isAfter(newStart, originalStartTime)) {
+        alert("Impossibile posticipare: lo spazio disponibile non è sufficiente per questo appuntamento.");
+        setShiftConfirm(null);
+        setSendingProposal(false);
+        return;
+      }
+      if (direction === 'anticipo' && !isBefore(newStart, originalStartTime)) {
+        alert("Impossibile anticipare: lo spazio disponibile non è sufficiente per questo appuntamento.");
+        setShiftConfirm(null);
+        setSendingProposal(false);
+        return;
+      }
+
       const proposalData: Partial<RescheduleProposal> = {
         gapStartTime: Timestamp.fromDate(showGapFiller.start),
         gapEndTime: Timestamp.fromDate(showGapFiller.end),
@@ -297,8 +313,11 @@ export default function MonoBarberDashboard({ selectedAppointmentId, selectedNot
     const ex = specialDays.find(e => e.date === dateString);
     const hours = (ex && !ex.isClosed) ? (ex.openingHours || salonSettings?.weeklySchedule[dayOfWeek]?.shifts || []) : ((!ex && salonSettings?.weeklySchedule[dayOfWeek]?.isOpen) ? salonSettings.weeklySchedule[dayOfWeek].shifts : []);
     
-    if (hours.length === 0) return { type: 'daily' as const, items: eachHourOfInterval({ start: setHours(startOfDay(selectedDate), 8), end: setHours(startOfDay(selectedDate), 20) }), formatItem: (item: Date) => format(item, 'HH:00') };
-    return { type: 'daily' as const, items: eachHourOfInterval({ start: setHours(startOfDay(selectedDate), Math.floor(Math.min(...hours.map(h => h.start)))), end: setHours(startOfDay(selectedDate), Math.ceil(Math.max(...hours.map(h => h.end)))) }), formatItem: (item: Date) => format(item, 'HH:00') };
+    // 🚀 La griglia termina con l'ultima riga che CONTIENE la chiusura: mai righe intere oltre la chiusura
+    if (hours.length === 0) return { type: 'daily' as const, items: eachHourOfInterval({ start: setHours(startOfDay(selectedDate), 8), end: setHours(startOfDay(selectedDate), 19) }), formatItem: (item: Date) => format(item, 'HH:00') };
+    const startH = Math.floor(Math.min(...hours.map(h => h.start)));
+    const endH = Math.max(startH, Math.ceil(Math.max(...hours.map(h => h.end))) - 1);
+    return { type: 'daily' as const, items: eachHourOfInterval({ start: setHours(startOfDay(selectedDate), startH), end: setHours(startOfDay(selectedDate), endH) }), formatItem: (item: Date) => format(item, 'HH:00') };
   };
 
   const calendarData = getCalendarData();
@@ -453,12 +472,20 @@ export default function MonoBarberDashboard({ selectedAppointmentId, selectedNot
                         const appStart = app.startTime.toDate();
                         const appEnd = app.endTime.toDate();
                         const phoneNum = app.isForFriend ? app.friendDetails?.phone : app.customer?.phoneNumber;
+                        // 🚀 Badge FLEX: durata reale < somma durate nominali dei servizi
+                        const nominalDuration = app.services.reduce((acc, s) => acc + s.duration, 0);
+                        const actualDuration = (app.endTime.toDate().getTime() - app.startTime.toDate().getTime()) / 60000;
+                        const isFlex = actualDuration < nominalDuration;
+                        // 🚀 Larghezza card proporzionale alla durata (coerente con la vista Giorno)
+                        const isMobileWeek = typeof window !== 'undefined' && window.innerWidth < 640;
+                        const weekCardWidth = Math.max((actualDuration / 30) * (isMobileWeek ? 7 : 10), 8);
                         
                         return (
                           <div 
                             key={app.id} 
                             onClick={() => setSelectedAppointment(app)}
-                            className="shrink-0 p-2.5 rounded-xl shadow-sm flex flex-col justify-between cursor-pointer border border-black/5 bg-black text-white min-w-[160px] sm:min-w-[200px] max-w-[85vw] hover:scale-[1.02] transition-transform"
+                            style={{ width: `${weekCardWidth}rem`, maxWidth: '85vw' }}
+                            className="shrink-0 p-2.5 rounded-xl shadow-sm flex flex-col justify-between cursor-pointer border border-black/5 bg-black text-white hover:scale-[1.02] transition-transform"
                           >
                             <div className="flex justify-between items-start gap-2">
                               <div className="font-bold text-xs truncate flex-1">{getDisplayName(app)}</div>
@@ -468,7 +495,10 @@ export default function MonoBarberDashboard({ selectedAppointmentId, selectedNot
                                 <span>{format(appEnd, 'HH:mm')}</span>
                               </div>
                             </div>
-                            <div className="text-[9px] opacity-70 truncate mt-1.5">{app.services.map(s => s.name).join(', ')}</div>
+                            <div className="flex items-center gap-1 mt-1.5 min-w-0">
+                              {isFlex && <span className="shrink-0 text-[8px] font-black bg-amber-400 text-black px-1.5 py-0.5 rounded-full">⚡ FLEX</span>}
+                              <div className="text-[9px] opacity-70 truncate">{app.services.map(s => s.name).join(', ')}</div>
+                            </div>
                             {phoneNum && <div className="text-[9px] opacity-60 flex items-center gap-1 mt-1"><Phone size={8}/> {phoneNum}</div>}
                           </div>
                         )
@@ -527,25 +557,48 @@ export default function MonoBarberDashboard({ selectedAppointmentId, selectedNot
             });
 
             if (!isBreak && !searchTerm && calendarData.type === 'daily' && salonSettings?.weeklySchedule) {
-              let currentMarker = itemStart;
-              const sortedApps = [...allOverlappingApps].sort((a,b) => a.startTime.toMillis() - b.startTime.toMillis());
+              // 🚀 CLAMPING AI TURNI: i buchi esistono SOLO dentro l'orario di apertura
+              // (fix: niente più "+1h" fantasma dopo la chiusura, es. fascia 20:00-21:00 con chiusura alle 20:00)
+              const dateString = format(selectedDate, 'yyyy-MM-dd');
+              const dayOfWeek = getDay(selectedDate);
+              const exception = specialDays.find(ex => ex.date === dateString);
 
-              sortedApps.forEach(app => {
-                const appStart = app.startTime.toDate();
-                const appEnd = app.endTime.toDate();
-                const effectiveStart = isBefore(appStart, itemStart) ? itemStart : appStart;
-                const effectiveEnd = isAfter(appEnd, itemEnd) ? itemEnd : appEnd;
+              let activeHours: TimeRange[] = (exception && !exception.isClosed) ? (exception.openingHours || salonSettings.weeklySchedule[dayOfWeek]?.shifts || []) : ((!exception && salonSettings.weeklySchedule[dayOfWeek]?.isOpen) ? salonSettings.weeklySchedule[dayOfWeek].shifts : []);
 
-                if (isBefore(currentMarker, effectiveStart)) {
-                  const dur = (effectiveStart.getTime() - currentMarker.getTime()) / 60000;
-                  if (dur >= 15 && isAfter(currentMarker, addMinutes(currentTime, 30))) gapsForThisItem.push({ start: currentMarker, end: effectiveStart, duration: dur });
-                }
-                if (isAfter(effectiveEnd, currentMarker)) currentMarker = effectiveEnd;
+              const nowPlus30 = addMinutes(currentTime, 30);
+
+              const currentShift = activeHours.find(range => {
+                const sStart = setMinutes(setHours(startOfDay(selectedDate), Math.floor(range.start)), Math.round((range.start - Math.floor(range.start)) * 60));
+                const sEnd = setMinutes(setHours(startOfDay(selectedDate), Math.floor(range.end)), Math.round((range.end - Math.floor(range.end)) * 60));
+                return isBefore(itemStart, sEnd) && isAfter(itemEnd, sStart);
               });
 
-              if (isBefore(currentMarker, itemEnd)) {
-                const dur = (itemEnd.getTime() - currentMarker.getTime()) / 60000;
-                if (dur >= 15 && isAfter(currentMarker, addMinutes(currentTime, 30))) gapsForThisItem.push({ start: currentMarker, end: itemEnd, duration: dur });
+              if (currentShift) {
+                const shiftStart = setMinutes(setHours(startOfDay(selectedDate), Math.floor(currentShift.start)), Math.round((currentShift.start - Math.floor(currentShift.start)) * 60));
+                const shiftEnd = setMinutes(setHours(startOfDay(selectedDate), Math.floor(currentShift.end)), Math.round((currentShift.end - Math.floor(currentShift.end)) * 60));
+
+                let currentMarker = isBefore(itemStart, shiftStart) ? shiftStart : itemStart;
+                const realSlotEnd = isAfter(itemEnd, shiftEnd) ? shiftEnd : itemEnd;
+
+                const sortedApps = [...allOverlappingApps].sort((a,b) => a.startTime.toMillis() - b.startTime.toMillis());
+
+                sortedApps.forEach(app => {
+                  const appStart = app.startTime.toDate();
+                  const appEnd = app.endTime.toDate();
+                  const effectiveStart = isBefore(appStart, itemStart) ? itemStart : appStart;
+                  const effectiveEnd = isAfter(appEnd, itemEnd) ? itemEnd : appEnd;
+
+                  if (isBefore(currentMarker, effectiveStart)) {
+                    const dur = (effectiveStart.getTime() - currentMarker.getTime()) / 60000;
+                    if (dur >= 15 && isAfter(currentMarker, nowPlus30)) gapsForThisItem.push({ start: currentMarker, end: effectiveStart, duration: dur });
+                  }
+                  if (isAfter(effectiveEnd, currentMarker)) currentMarker = effectiveEnd;
+                });
+
+                if (isBefore(currentMarker, realSlotEnd)) {
+                  const dur = (realSlotEnd.getTime() - currentMarker.getTime()) / 60000;
+                  if (dur >= 15 && isAfter(currentMarker, nowPlus30)) gapsForThisItem.push({ start: currentMarker, end: realSlotEnd, duration: dur });
+                }
               }
             }
 
@@ -556,6 +609,9 @@ export default function MonoBarberDashboard({ selectedAppointmentId, selectedNot
 
             return (
               <div key={item.toISOString()} className={cn("flex min-h-[68px] relative border-b border-gray-50/50", isBreak && "bg-gray-50/50")}>
+                {isSameDay(selectedDate, currentTime) && isBefore(addHours(item, 1), currentTime) && (
+                  <div className="absolute inset-0 bg-gray-200/30 backdrop-grayscale-[0.5] z-10 pointer-events-none" />
+                )}
                 <div className="w-16 p-3 text-right border-r border-gray-50 flex-shrink-0">
                   <span className="text-xs font-bold text-gray-400">{calendarData.formatItem(item)}</span>
                 </div>
@@ -597,11 +653,21 @@ export default function MonoBarberDashboard({ selectedAppointmentId, selectedNot
                         
                         const phoneNum = app.isForFriend ? app.friendDetails?.phone : app.customer?.phoneNumber;
                         
+                        // 🚀 Badge FLEX: l'appuntamento usa la flessibilità (durata reale < nominale)
+                        const nominalDuration = app.services.reduce((acc, s) => acc + s.duration, 0);
+                        const actualDuration = (app.endTime.toDate().getTime() - app.startTime.toDate().getTime()) / 60000;
+                        const isFlex = actualDuration < nominalDuration;
+
+                        // 🚀 Larghezza card (vecchia versione): proporzionale alla DURATA TOTALE dell'appuntamento
+                        const isMobileCard = typeof window !== 'undefined' && window.innerWidth < 640;
+                        const cardWidth = (actualDuration / 30) * (isMobileCard ? 7 : 10);
+
                         const isCandidate = rescheduleCandidates.some(c => c.id === app.id);
                         const isSelected = selectedCandidates.includes(app.id!);
                         const selectionMode = showGapFiller !== null;
-                        const isAdjacentNext = selectionMode && Math.abs(appStart.getTime() - showGapFiller.end.getTime()) < 60000;
-                        const isAdjacentPrev = selectionMode && Math.abs(appEnd.getTime() - showGapFiller.start.getTime()) < 60000;
+                        // 🚀 GUARDIA: proposte anticipo/posticipo solo su buchi reali (durata > 0)
+                        const isAdjacentNext = !!showGapFiller && isAfter(showGapFiller.end, showGapFiller.start) && Math.abs(appStart.getTime() - showGapFiller.end.getTime()) < 60000;
+                        const isAdjacentPrev = !!showGapFiller && isAfter(showGapFiller.end, showGapFiller.start) && Math.abs(appEnd.getTime() - showGapFiller.start.getTime()) < 60000;
 
                         if (isSpillover) {
                           return (
@@ -624,7 +690,7 @@ export default function MonoBarberDashboard({ selectedAppointmentId, selectedNot
                                 setSelectedAppointment(app);
                               }
                             }} 
-                            style={{ flexGrow: dur / 30, flexShrink: 0, flexBasis: 0, minWidth: 0 }} 
+                            style={{ width: `${cardWidth}rem`, maxWidth: '85vw', flexShrink: 0 }} 
                             className={cn(
                               "h-[60px] p-2.5 rounded-xl shadow-sm flex flex-col justify-between cursor-pointer transition-all border border-black/5 relative overflow-hidden group", 
                               app.id === highlightedAppId ? "ring-2 ring-emerald-500 scale-[1.02]" : "hover:scale-[1.01]", 
@@ -655,8 +721,11 @@ export default function MonoBarberDashboard({ selectedAppointmentId, selectedNot
                               </div>
                             </div>
                             <div className="flex justify-between items-end mt-1">
-                              <div className="text-[9px] opacity-70 truncate max-w-[60%]">{app.services.map(s => s.name).join(', ')}</div>
-                              {phoneNum && <div className="text-[9px] opacity-60 flex items-center gap-1"><Phone size={8}/> {phoneNum}</div>}
+                              <div className="flex items-center gap-1 min-w-0 flex-1">
+                                {isFlex && <span className="shrink-0 text-[8px] font-black bg-amber-400 text-black px-1.5 py-0.5 rounded-full">⚡ FLEX</span>}
+                                <div className="text-[9px] opacity-70 truncate">{app.services.map(s => s.name).join(', ')}</div>
+                              </div>
+                              {phoneNum && <div className="text-[9px] opacity-60 flex items-center gap-1 shrink-0"><Phone size={8}/> {phoneNum}</div>}
                             </div>
                             {isSelected && (
                               <div className="absolute bottom-1 right-1 bg-white text-emerald-600 rounded-full p-0.5 shadow-sm animate-in zoom-in">

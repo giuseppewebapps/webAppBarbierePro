@@ -94,16 +94,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     </html>
   `;
 
+  // 🚀 MITTENTE CONFIGURABILE: con dominio verificato su Resend (es. EMAIL_FROM="Notifiche <info@eureka.hair>")
+  // l'invio funziona verso QUALSIASI destinatario; con il fallback sandbox (resend.dev) solo verso l'account Resend.
+  const fromAddress = process.env.EMAIL_FROM || 'Notifiche Salone <onboarding@resend.dev>';
+  console.log(`[EMAIL] Invio notifica → tenant: ${tenantId || 'n/d'}, tipo: ${type}, destinatario: ${recipient}, mittente: ${fromAddress}`);
+
   try {
     const data = await resend.emails.send({
-      from: 'Notifiche Salone <onboarding@resend.dev>',
+      from: fromAddress,
       to: [recipient],
       subject,
       html: emailHtml,
     });
+
+    // 🚀 FIX BUG SILENT: Resend NON lancia eccezione in caso di errore (es. 403 sandbox,
+    // dominio non verificato): restituisce "error" nel body. Prima la API rispondeva 200 facendola passare per inviata.
+    if (data.error) {
+      console.error(`[EMAIL-ERROR] Resend ha rifiutato l'invio → tenant: ${tenantId || 'n/d'}, destinatario: ${recipient}, mittente: ${fromAddress}, motivo: ${data.error.message}`);
+      return res.status(502).json({ success: false, error: data.error.message || 'Errore Resend' });
+    }
+
+    console.log(`[EMAIL] Inviata correttamente → id: ${data.data?.id || 'n/d'}, destinatario: ${recipient}`);
     return res.status(200).json({ success: true, data });
   } catch (error) {
-    console.error("Errore invio email:", error);
+    console.error(`[EMAIL-ERROR] Eccezione invio → tenant: ${tenantId || 'n/d'}, destinatario: ${recipient}`, error);
     return res.status(500).json({ error: (error as Error).message });
   }
 }
