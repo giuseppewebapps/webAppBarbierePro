@@ -29,7 +29,7 @@ export interface Service {
   description?: string;
   price: number;
   duration: number; // in minuti
-  flexibility?: number;
+  flexibility: number;
 }
 
 export interface Appointment {

@@ -37,6 +37,14 @@ service cloud.firestore {
     }
 
     // ==========================================
+    // CONFIG GLOBALE (Kill switch versioni)
+    // ==========================================
+    match /config/{docId} {
+      allow read: if true; // Il client deve poterla leggere ad app aperta, anche prima del login
+      allow write: if false; // Scrivibile SOLO da Firebase Console (nessuno può manomettere il kill switch)
+    }
+
+    // ==========================================
     // SPAZIO MULTI-TENANT (Dati isolati per Salone)
     // ==========================================
     

@@ -4,17 +4,15 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     
-    <!-- Istruzioni Anti-Cache Aggressive per PWA -->
-    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-    <meta http-equiv="Pragma" content="no-cache" />
-    <meta http-equiv="Expires" content="0" />
+    <!-- La cache è gestita lato server (vercel.json) e dal service worker: i meta
+         http-equiv qui sotto sono inutili perché i browser li ignorano. -->
 
     <!-- Colore della barra di stato del telefono -->
     <meta name="theme-color" content="#000000" />
     
     <title>La tua barber App</title>
     
-    <link rel="manifest" href="/manifest.json" />
+    <link rel="manifest" href="/api/manifest" />
     <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
     <link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />

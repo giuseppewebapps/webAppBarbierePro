@@ -1,8 +1,10 @@
 {
-  "name": "Medo Hair Salon",
-  "short_name": "Medo HS App",
-  "description": "Prenota il tuo stile in pochi click",
+  "id": "/",
+  "name": "Eureka Hair",
+  "short_name": "Eureka",
+  "description": "Prenota il tuo appuntamento in pochi click",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
   "background_color": "#ffffff",
   "theme_color": "#000000",
