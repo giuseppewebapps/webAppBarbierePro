@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import AppointmentDetailsModal from './AppointmentDetailsModal';
-import { collection, query, orderBy, onSnapshot, doc, updateDoc, Timestamp, getDoc, getDocs, addDoc } from 'firebase/firestore';
+import { collection, query, orderBy, onSnapshot, doc, updateDoc, Timestamp, getDoc, getDocs, addDoc, where } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Appointment, UserProfile, RescheduleProposal, TimeRange, SpecialDay, ProposalType } from '../types';
 import { format, startOfDay, endOfDay, eachHourOfInterval, addHours, isSameDay, addDays, subDays, startOfWeek, endOfWeek, eachDayOfInterval, setHours, setMinutes, isAfter, isBefore, addMinutes, getDay } from 'date-fns';

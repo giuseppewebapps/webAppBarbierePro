@@ -248,7 +248,8 @@ export function calculateMultiStaffSlots(
   selectedStaffId: string | null,
   shift: Shift,
   yieldConfig: YieldConfig,
-  isManualBooking: boolean = false
+  isManualBooking: boolean = false,
+  staffShifts?: Record<string, Shift[]>
 ): Date[] {
   const D_req = requestedServices.reduce((acc, s) => acc + s.duration, 0);
   const flex_req = requestedServices.reduce((acc, s) => acc + (s.flexibility || 0), 0);
@@ -305,20 +306,25 @@ export function calculateMultiStaffSlots(
         return !!s && s.duration <= 30;
       });
 
-    const staffSlots = calculateOptimalSlots(
-      requestedCombo,
-      catalog,
-      staffAppointments,
-      shift,
-      yieldConfig,
-      isManualBooking,
-      staffAllShort
-    );
+    // Turni specifici del barbiere (es. orari ridotti) oppure il turno di salone unico
+    const staffWindows = staffShifts?.[staff.uid]?.length ? staffShifts![staff.uid] : [shift];
 
-    for (const slot of staffSlots) {
-      const timeKey = slot.getTime();
-      if (!allAvailableSlots.has(timeKey)) {
-        allAvailableSlots.set(timeKey, slot);
+    for (const window of staffWindows) {
+      const staffSlots = calculateOptimalSlots(
+        requestedCombo,
+        catalog,
+        staffAppointments,
+        window,
+        yieldConfig,
+        isManualBooking,
+        staffAllShort
+      );
+
+      for (const slot of staffSlots) {
+        const timeKey = slot.getTime();
+        if (!allAvailableSlots.has(timeKey)) {
+          allAvailableSlots.set(timeKey, slot);
+        }
       }
     }
   }

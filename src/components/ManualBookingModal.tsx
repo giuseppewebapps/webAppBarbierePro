@@ -10,7 +10,7 @@ import { Calendar as CalendarIcon, Clock, Scissors, CheckCircle2, XCircle, Chevr
 import { cn } from '../lib/utils';
 import { COUNTRY_CODES } from '../constants';
 import { Appointment, SpecialDay, TimeRange, StaffProfile } from '../types';
-import { calculateMultiStaffSlots } from '../utils/slotEngine';
+import { calculateMultiStaffSlots, Shift as SlotShift } from '../utils/slotEngine';
 import { generateWhatsAppLink } from '../utils/whatsapp';
 import { logSystemError } from '../utils/logger';
 
@@ -112,7 +112,7 @@ export default function ManualBookingModal({ onClose, onSuccess }: ManualBooking
       { before: startOfDay(new Date()) },
       (date: Date) => {
         const dateString = format(date, 'yyyy-MM-dd');
-        const exception = specialDays.find(ex => ex.date === dateString);
+        const exception = specialDays.find(ex => ex.date === dateString && !(ex as any).staffId);
         if (exception) return exception.isClosed;
         return !salonSettings?.weeklySchedule[getDay(date)]?.isOpen;
       }
@@ -127,43 +127,112 @@ export default function ManualBookingModal({ onClose, onSuccess }: ManualBooking
     }
   }, [selectedDate, selectedServices, salonSettings?.weeklySchedule, selectedStaffId]);
 
+  // 🚀 HELPER DISPONIBILITÀ E ORARI PER-DATA
+  const isSalonClosedOn = (dateString: string): boolean => {
+    const globalEx = specialDays.find(ex => ex.date === dateString && !(ex as any).staffId);
+    if (globalEx) return globalEx.isClosed;
+    return !(salonSettings?.weeklySchedule?.[getDay(new Date(dateString + 'T00:00:00'))]?.isOpen);
+  };
+
+  const isStaffAbsentOn = (staffId: string, dateString: string): boolean => {
+    const staffEx = specialDays.find(ex => ex.date === dateString && (ex as any).staffId === staffId);
+    return staffEx ? staffEx.isClosed : false;
+  };
+
+  // Orari per-barbiere: staff > salone (globale) > settimanali
+  const hoursForStaff = (staffId: string, dateString: string, dayOfWeek: number): TimeRange[] => {
+    const weeklyHours = salonSettings?.weeklySchedule?.[dayOfWeek]?.shifts || [];
+
+    const staffEx = specialDays.find(ex => ex.date === dateString && (ex as any).staffId === staffId);
+    if (staffEx) {
+      if (staffEx.isClosed) return [];
+      return staffEx.openingHours?.length ? staffEx.openingHours : weeklyHours;
+    }
+
+    const globalEx = specialDays.find(ex => ex.date === dateString && !(ex as any).staffId);
+    if (globalEx) {
+      if (globalEx.isClosed) return [];
+      return globalEx.openingHours?.length ? globalEx.openingHours : weeklyHours;
+    }
+
+    return weeklyHours;
+  };
+
+  const availableStaffForDate = (dateString: string, staff: StaffProfile[]): StaffProfile[] =>
+    staff.filter(s => !isStaffAbsentOn(s.uid, dateString));
+
+  const shiftsForDay = (hours: TimeRange[], day: Date): SlotShift[] =>
+    hours.map(range => {
+      const sH = Math.floor(range.start);
+      const sM = Math.round((range.start - sH) * 60);
+      const eH = Math.floor(range.end);
+      const eM = Math.round((range.end - eH) * 60);
+      return { start: setMinutes(setHours(day, sH), sM), end: setMinutes(setHours(day, eH), eM) };
+    });
+
   const calculateSlots = async () => {
     if (!tenantId || !salonSettings?.weeklySchedule || !salonSettings?.yieldConfig) return;
     setLoading(true);
     const dayStart = startOfDay(selectedDate);
-    
+
     const dateString = format(selectedDate, 'yyyy-MM-dd');
     const dayOfWeek = getDay(selectedDate);
-    const exceptionForToday = specialDays.find(ex => ex.date === dateString);
 
-    let activeOpeningHours: TimeRange[] = [];
-    if (exceptionForToday && !exceptionForToday.isClosed) {
-      activeOpeningHours = exceptionForToday.openingHours?.length ? exceptionForToday.openingHours : (salonSettings.weeklySchedule[dayOfWeek]?.shifts || []);
-    } else {
-      activeOpeningHours = salonSettings.weeklySchedule[dayOfWeek]?.shifts || [];
+    // Chiusura globale del salone -> nessuno slot
+    if (isSalonClosedOn(dateString)) {
+      setAvailableSlots([]);
+      setLoading(false);
+      return;
     }
 
+    const dateAvailableStaff = availableStaffForDate(dateString, staffMembers);
+
     try {
-      const snap = await getDocs(query(collection(db, 'salons', tenantId, 'appointments'), 
-        where('startTime', '>=', Timestamp.fromDate(dayStart)), 
+      const snap = await getDocs(query(collection(db, 'salons', tenantId, 'appointments'),
+        where('startTime', '>=', Timestamp.fromDate(dayStart)),
         where('startTime', '<=', Timestamp.fromDate(endOfDay(selectedDate)))
       ));
       const dayAppointments = snap.docs.map(doc => doc.data() as Appointment).filter(app => app.status === 'booked');
 
       const mappedCatalog = salonSettings.services.map(s => ({ id: s.id, duration: s.duration, flexibility: s.flexibility || 0 }));
-      let allValidSlots: Date[] = [];
 
-      activeOpeningHours.forEach(range => {
-        const shiftStart = setMinutes(setHours(dayStart, Math.floor(range.start)), Math.round((range.start - Math.floor(range.start)) * 60));
-        const shiftEnd = setMinutes(setHours(dayStart, Math.floor(range.end)), Math.round((range.end - Math.floor(range.end)) * 60));
+      // 🏠 MONO-SALONE (nessuno staff configurato): orari del salone, motore legacy
+      if (staffMembers.length === 0) {
+        let legacySlots: Date[] = [];
+        shiftsForDay(hoursForStaff('', dateString, dayOfWeek), dayStart).forEach(window => {
+          legacySlots = [...legacySlots, ...calculateMultiStaffSlots(
+            selectedServices, mappedCatalog, dayAppointments, [], selectedStaffId,
+            { start: window.start, end: window.end }, salonSettings.yieldConfig, true
+          )];
+        });
+        const uniqueLegacySlots = Array.from(new Set(legacySlots.map(d => d.getTime())))
+          .map(time => new Date(time))
+          .sort((a, b) => a.getTime() - b.getTime());
+        setAvailableSlots(uniqueLegacySlots.filter(slot => isAfter(slot, new Date())));
+        return;
+      }
 
-        // Motore Ibrido: calcola per singolo operatore se selezionato, altrimenti per tutti
-        const shiftSlots = calculateMultiStaffSlots(
-          selectedServices, mappedCatalog, dayAppointments, staffMembers, selectedStaffId,
-          { start: shiftStart, end: shiftEnd }, salonSettings.yieldConfig, true
-        );
-        allValidSlots = [...allValidSlots, ...shiftSlots];
+      // Se nessun barbiere è disponibile quel giorno -> nessuno slot
+      if (dateAvailableStaff.length === 0) {
+        setAvailableSlots([]);
+        setLoading(false);
+        return;
+      }
+
+      // Turni per-barbiere (orari ridotti/assenza gestiti da hoursForStaff)
+      const staffShifts: Record<string, SlotShift[]> = {};
+      dateAvailableStaff.forEach(st => {
+        staffShifts[st.uid] = shiftsForDay(hoursForStaff(st.uid, dateString, dayOfWeek), dayStart);
       });
+
+      // 🚀 Motore multi-staff con isManualBooking=true (l'operatore inserisce manualmente)
+      const allValidSlots = calculateMultiStaffSlots(
+        selectedServices, mappedCatalog, dayAppointments, dateAvailableStaff, selectedStaffId,
+        { start: setHours(dayStart, 8), end: setHours(dayStart, 20) },
+        salonSettings.yieldConfig,
+        true,       // <-- isManualBooking resta true per il manuale
+        staffShifts
+      );
 
       const uniqueSortedSlots = Array.from(new Set(allValidSlots.map(d => d.getTime()))).map(time => new Date(time)).sort((a, b) => a.getTime() - b.getTime());
       setAvailableSlots(uniqueSortedSlots.filter(slot => isAfter(slot, new Date())));
