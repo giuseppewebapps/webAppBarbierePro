@@ -4,6 +4,7 @@ import { collection, query, orderBy, onSnapshot, doc, updateDoc, Timestamp, getD
 import { db } from '../firebase';
 import { Appointment, UserProfile, RescheduleProposal, TimeRange, SpecialDay, ProposalType } from '../types';
 import { format, startOfDay, endOfDay, eachHourOfInterval, addHours, isSameDay, addDays, subDays, startOfWeek, endOfWeek, eachDayOfInterval, setHours, setMinutes, isAfter, isBefore, addMinutes, getDay } from 'date-fns';
+import { getCardRowStart } from '../utils/timeline';
 import { it } from 'date-fns/locale';
 import { Calendar as CalendarIcon, Phone, Clock, XCircle, AlertCircle, ChevronLeft, ChevronRight, Check, Send, CheckCircle2, MessageCircle, ArrowUpCircle, Search } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
@@ -522,6 +523,8 @@ export default function MonoBarberDashboard({ selectedAppointmentId, selectedNot
 
             let isBreak = false;
             let offRange: { start: Date; end: Date; label: string } | null = null;
+            // 🚀 GUARDIA: la card non può migrare su una riga "PAUSA SALONE" (dove non viene renderizzata)
+            let isRowBreakHour: (d: Date) => boolean = () => false;
 
             if (calendarData.type === 'daily' && salonSettings?.weeklySchedule) {
               const dateString = format(selectedDate, 'yyyy-MM-dd');
@@ -622,7 +625,7 @@ export default function MonoBarberDashboard({ selectedAppointmentId, selectedNot
                   ) : (
                     <>
                       {offRange && (
-                        <div className="px-4 py-2 bg-gray-100/80 border-2 border-dashed border-gray-300 text-gray-400 rounded-2xl flex items-center justify-center text-[10px] font-bold uppercase tracking-wider shrink-0">
+                        <div className="h-[60px] px-4 bg-gray-100/80 border-2 border-dashed border-gray-300 text-gray-400 rounded-2xl flex items-center justify-center text-[10px] font-bold uppercase tracking-wider shrink-0">
                           {offRange.label}
                         </div>
                       )}
@@ -635,7 +638,7 @@ export default function MonoBarberDashboard({ selectedAppointmentId, selectedNot
                               key={`gap-${idx}`} 
                               onClick={() => findCandidatesForGap({ start: itemObj.data.start, end: itemObj.data.end })} 
                               style={{ flexGrow: gapDur / 30, flexShrink: 0, flexBasis: 0, minWidth: 0 }} 
-                              className="h-[52px] bg-amber-50 border-2 border-dashed border-amber-300 text-amber-600 rounded-xl hover:bg-amber-100 transition-all flex flex-col items-center justify-center font-bold text-[11px]"
+                              className="h-[60px] bg-amber-50 border-2 border-dashed border-amber-300 text-amber-600 rounded-xl hover:bg-amber-100 transition-all flex flex-col items-center justify-center font-bold text-[11px]"
                             >
                               <span className="text-amber-500 mb-0.5">+</span><span>{formatDurationText(gapDur)}</span>
                             </button>
@@ -669,11 +672,34 @@ export default function MonoBarberDashboard({ selectedAppointmentId, selectedNot
                         const isAdjacentNext = !!showGapFiller && isAfter(showGapFiller.end, showGapFiller.start) && Math.abs(appStart.getTime() - showGapFiller.end.getTime()) < 60000;
                         const isAdjacentPrev = !!showGapFiller && isAfter(showGapFiller.end, showGapFiller.start) && Math.abs(appEnd.getTime() - showGapFiller.start.getTime()) < 60000;
 
-                        if (isSpillover) {
+                        // 🚀 CARD LEGGIBILE: la card va nella riga dove l'appuntamento ha più spazio visibile;
+                        //    le altre righe mostrano il box compatto "INIZIO SERVIZIO" / "CONTINUA"
+                        const cardRowStart = getCardRowStart(appStart, appEnd, itemStart, isRowBreakHour);
+                        const isCardHere = cardRowStart.getTime() === itemStart.getTime();
+                        const openAppointment = () => {
+                          if (selectionMode) {
+                            if (isCandidate) toggleCandidate(app.id!);
+                          } else {
+                            setSelectedAppointment(app);
+                          }
+                        };
+
+                        if (!isCardHere) {
+                          const isBeforeCard = isBefore(itemStart, cardRowStart);
                           return (
-                            <div key={`${app.id}-spill`} style={{ flexGrow: dur / 30, flexShrink: 0, flexBasis: 0, minWidth: 0 }} className="h-[52px] bg-gray-100 border-2 border-dashed border-gray-300 rounded-xl flex items-center justify-center opacity-70">
-                              <span className="text-[9px] sm:text-[10px] font-bold text-gray-400 uppercase text-center leading-tight">
-                                Continua<br/>{format(appEnd, 'HH:mm')}
+                            <div 
+                              key={`${app.id}-${isBeforeCard ? 'start' : 'spill'}`} 
+                              onClick={openAppointment}
+                              title={getDisplayName(app)}
+                              style={{ flexGrow: dur / 30, flexShrink: 0, flexBasis: 0, minWidth: 104 }} 
+                              className={cn(
+                                "min-h-[76px] sm:h-[88px] bg-gray-100 border-2 border-dashed border-gray-300 rounded-xl flex items-center justify-center opacity-70 cursor-pointer hover:opacity-100 hover:bg-gray-200/70 transition-all",
+                                selectionMode && !isCandidate ? "opacity-30 grayscale" : "",
+                                isSelected ? "bg-emerald-500 border-emerald-500 opacity-100" : ""
+                              )}
+                            >
+                              <span className={cn("text-[9px] sm:text-[10px] font-bold uppercase text-center leading-tight", isSelected ? "text-white" : "text-gray-400")}>
+                                {isBeforeCard ? <>Inizio servizio<br/>{format(appStart, 'HH:mm')}</> : <>Continua<br/>{format(appEnd, 'HH:mm')}</>}
                               </span>
                             </div>
                           );
@@ -683,20 +709,14 @@ export default function MonoBarberDashboard({ selectedAppointmentId, selectedNot
                           <div 
                             key={app.id} 
                             id={`appointment-${app.id}`} 
-                            onClick={() => {
-                              if (selectionMode) {
-                                if (isCandidate) toggleCandidate(app.id!);
-                              } else {
-                                setSelectedAppointment(app);
-                              }
-                            }} 
+                            onClick={openAppointment} 
                             style={{ width: `${cardWidth}rem`, maxWidth: '85vw', flexShrink: 0 }} 
                             className={cn(
-                              "h-[60px] p-2.5 rounded-xl shadow-sm flex flex-col justify-between cursor-pointer transition-all border border-black/5 relative overflow-hidden group", 
-                              app.id === highlightedAppId ? "ring-2 ring-emerald-500 scale-[1.02]" : "hover:scale-[1.01]", 
+                              "p-2 sm:p-2.5 rounded-xl shadow-md flex flex-col justify-between text-left cursor-pointer transition-all relative min-h-[76px] sm:h-[88px] duration-500 group", 
+                              app.id === highlightedAppId ? "ring-4 ring-emerald-500 shadow-[0_0_30px_rgba(16,185,129,0.6)] scale-[1.05] z-20" : "hover:scale-[1.02]", 
                               selectionMode && !isCandidate && !isAdjacentNext && !isAdjacentPrev ? "opacity-30 grayscale" : "",
-                              isSelected ? "bg-emerald-500 text-white ring-2 ring-emerald-500" :
-                              app.status === 'completed' ? "bg-emerald-700 text-white" : "bg-black text-white"
+                              isSelected ? "bg-emerald-500 text-white ring-4 ring-emerald-500/30" :
+                              (app.status === 'completed' || (app.status === 'booked' && isBefore(appEnd, currentTime))) ? "bg-emerald-600 text-white" : "bg-black text-white"
                             )}
                           >
                             {(isAdjacentNext || isAdjacentPrev) && !sendingProposal && (
@@ -714,18 +734,35 @@ export default function MonoBarberDashboard({ selectedAppointmentId, selectedNot
                               </button>
                             )}
 
-                            <div className="flex justify-between items-start gap-2">
-                              <div className="font-bold text-xs truncate flex-1">{getDisplayName(app)}</div>
-                              <div className="text-[9px] font-bold bg-white/20 px-2 py-0.5 rounded-full shrink-0">
-                                {format(appStart, 'HH:mm')} - {format(appEnd, 'HH:mm')}
+                            {isFlex && (
+                              <div
+                                className="absolute -top-1.5 -right-1.5 bg-amber-400 text-amber-950 text-[7px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded shadow-sm border border-amber-500 z-10 cursor-help"
+                                title={`Buco riempito: servizio compresso da ${nominalDuration} a ${actualDuration} min`}
+                              >
+                                ⚠️ Flex
+                              </div>
+                            )}
+
+                            <div>
+                              <div className="flex justify-between items-start gap-2">
+                                <div className="font-bold text-[11px] sm:text-xs truncate">{getDisplayName(app)}</div>
+                                <div className="text-[9px] font-bold opacity-60 flex flex-col items-end leading-tight shrink-0">
+                                  <span>{format(appStart, 'HH:mm')}</span>
+                                  <span>- {format(appEnd, 'HH:mm')}</span>
+                                </div>
+                              </div>
+                              <div className="text-[9px] opacity-70 mt-0.5 truncate">
+                                {app.services.map(s => s.name).join(', ')}
                               </div>
                             </div>
-                            <div className="flex justify-between items-end mt-1">
-                              <div className="flex items-center gap-1 min-w-0 flex-1">
-                                {isFlex && <span className="shrink-0 text-[8px] font-black bg-amber-400 text-black px-1.5 py-0.5 rounded-full">⚡ FLEX</span>}
-                                <div className="text-[9px] opacity-70 truncate">{app.services.map(s => s.name).join(', ')}</div>
+
+                            <div className="flex justify-between items-center mt-1.5 pt-1.5 border-t border-white/10">
+                              <div className="flex items-center gap-1 text-[9px] truncate">
+                                <Phone size={8} /> {phoneNum?.slice(-10)}
                               </div>
-                              {phoneNum && <div className="text-[9px] opacity-60 flex items-center gap-1 shrink-0"><Phone size={8}/> {phoneNum}</div>}
+                              {app.isForFriend && (
+                                <div className="text-[8px] bg-white/20 px-1 rounded uppercase font-bold">Amico</div>
+                              )}
                             </div>
                             {isSelected && (
                               <div className="absolute bottom-1 right-1 bg-white text-emerald-600 rounded-full p-0.5 shadow-sm animate-in zoom-in">
