@@ -123,6 +123,10 @@ export interface SpecialDay {
   date: string; // Formato 'YYYY-MM-DD'
   isClosed: boolean; 
   openingHours?: { start: number; end: number }[]; 
+  // 🚀 AUDIT MINIMO: tracciamo chi ha creato/modificato un'eccezione (retrocompatibile)
+  createdAt?: any; // Timestamp
+  updatedAt?: any; // Timestamp
+  createdBy?: string; // uid dello staff
 }
 
 export interface YieldConfig {

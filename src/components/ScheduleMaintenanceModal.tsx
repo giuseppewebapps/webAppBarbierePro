@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { doc, setDoc, getDoc, deleteDoc, collection, query, where, getDocs, Timestamp } from 'firebase/firestore';
 import { db } from '../firebase';
-import { format, startOfDay, endOfDay } from 'date-fns';
+import { format, getDay, startOfDay, endOfDay } from 'date-fns';
 import { it } from 'date-fns/locale';
 import { DayPicker } from 'react-day-picker';
 import ScheduleSettingsModal from './ScheduleSettingsModal';
-import { XCircle, Settings, Calendar as CalendarIcon, Save, Trash2, Users, Lock } from 'lucide-react';
+import { XCircle, Settings, Calendar as CalendarIcon, Save, Trash2, Users, Lock, AlertTriangle, Plus } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { SpecialDay, Appointment, StaffProfile } from '../types';
 import { useAuth } from '../context/AuthContext';
@@ -16,8 +16,15 @@ interface Props {
   onClose: () => void;
 }
 
+// Converte 8.5 -> "08:30" (per leggere l'orario standard e riepilogare le fasce)
+const decimalToHHmm = (value: number) => {
+  const h = Math.floor(value);
+  const m = Math.round((value - h) * 60);
+  return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+};
+
 export default function ScheduleMaintenanceModal({ onClose }: Props) {
-  const { tenantId } = useAuth();
+  const { tenantId, profile } = useAuth();
   const { settings: salonSettings } = useSalonSettings(tenantId);
   const { isOwner, loading: ownerLoading } = useIsOwner();
 
@@ -29,6 +36,11 @@ export default function ScheduleMaintenanceModal({ onClose }: Props) {
   const [targetStaffId, setTargetStaffId] = useState<string | 'all'>('all');
   
   const [isScheduleSettingsOpen, setIsScheduleSettingsOpen] = useState(false);
+
+  // 🚀 SICUREZZA ANTI-TAP: un'eccezione esiste solo se creata/modificata esplicitamente
+  const [isExceptionMode, setIsExceptionMode] = useState(false);
+  const [existingException, setExistingException] = useState(false);
+  const [existingMeta, setExistingMeta] = useState<{ createdAt?: any; createdBy?: string } | null>(null);
   
   const [shift1Start, setShift1Start] = useState<number>(8);
   const [shift1End, setShift1End] = useState<number>(13);
@@ -73,6 +85,10 @@ export default function ScheduleMaintenanceModal({ onClose }: Props) {
       
       if (docSnap.exists()) {
         const data = docSnap.data() as SpecialDay;
+        // 🚀 Eccezione esistente: si entra in modalità modifica con i suoi valori
+        setExistingException(true);
+        setExistingMeta({ createdAt: data.createdAt, createdBy: data.createdBy });
+        setIsExceptionMode(true);
         setIsClosed(data.isClosed);
         if (data.openingHours && data.openingHours.length > 0) {
           setShift1Start(data.openingHours[0].start);
@@ -86,17 +102,58 @@ export default function ScheduleMaintenanceModal({ onClose }: Props) {
           }
         }
       } else {
+        // 🚀 NIENTE più default automatici (8-13 / 14-20): senza eccezione si applica
+        // l'orario standard e l'owner deve confermare esplicitamente la creazione.
+        setExistingException(false);
+        setExistingMeta(null);
+        setIsExceptionMode(false);
         setIsClosed(false);
-        setShift1Start(8); setShift1End(13);
-        setHasShift2(true);
-        setShift2Start(14); setShift2End(20);
       }
     };
     fetchException();
   }, [selectedDate, tenantId, targetStaffId]);
 
+  // 🚀 Orario standard del giorno selezionato (riferimento: questo modal NON lo modifica mai)
+  const standardDay = salonSettings?.weeklySchedule?.[getDay(selectedDate)];
+  const standardLabel = !salonSettings
+    ? '—'
+    : (standardDay?.isOpen && standardDay.shifts?.length
+        ? standardDay.shifts.map(s => `${decimalToHHmm(s.start)}–${decimalToHHmm(s.end)}`).join(', ')
+        : 'CHIUSO');
+
+  // 🚀 Precompila le fasce con l'orario standard del giorno (nessun default inventato)
+  const applyStandardShifts = () => {
+    const shifts = standardDay?.isOpen ? (standardDay.shifts || []) : [];
+    if (shifts.length > 0) {
+      setShift1Start(shifts[0].start);
+      setShift1End(shifts[0].end);
+      if (shifts.length > 1) {
+        setHasShift2(true);
+        setShift2Start(shifts[1].start);
+        setShift2End(shifts[1].end);
+      } else {
+        setHasShift2(false);
+      }
+    } else {
+      setHasShift2(false);
+    }
+  };
+
+  // 🚀 CREAZIONE ESPLICITA: si entra in modalità eccezione solo premendo il bottone
+  const enterExceptionMode = () => {
+    applyStandardShifts();
+    const isStandardOpen = !!(standardDay?.isOpen && standardDay.shifts?.length);
+    setIsClosed(!isStandardOpen); // se lo standard è chiuso si parte da "chiuso/assente"
+    setIsExceptionMode(true);
+  };
+
+  const handleClosedToggle = (checked: boolean) => {
+    setIsClosed(checked);
+    if (!checked) applyStandardShifts();
+  };
+
   const handleSave = async () => {
-    if (!tenantId) return;
+    if (!tenantId || !isExceptionMode) return;
     setLoading(true);
     const dateString = format(selectedDate, 'yyyy-MM-dd');
     
@@ -156,12 +213,34 @@ export default function ScheduleMaintenanceModal({ onClose }: Props) {
       console.error("Errore controllo conflitti:", e);
     }
 
+    // 🚀 CONFERMA RIEPILOGATIVA: nessun salvataggio involontario
+    const dateLabel = format(selectedDate, 'EEEE d MMMM yyyy', { locale: it });
+    const targetLabel = targetStaffId === 'all' ? 'tutto il salone' : 'il barbiere selezionato';
+    const summary = isClosed
+      ? (targetStaffId === 'all' ? 'Il salone risulterà CHIUSO tutto il giorno.' : 'Il barbiere risulterà ASSENTE per tutto il giorno.')
+      : `Fasce orarie: ${openingHours.map(h => `${decimalToHHmm(h.start)}–${decimalToHHmm(h.end)}`).join(', ')}`;
+
+    const confirmed = window.confirm(
+      `Stai per salvare un'ECCEZIONE per ${dateLabel} (${targetLabel}).\n\n` +
+      `${summary}\n\n` +
+      `L'orario standard del ${format(selectedDate, 'EEEE', { locale: it })} (${standardLabel}) NON viene modificato: questa regola vale solo per questo giorno.\n\n` +
+      `Confermi il salvataggio?`
+    );
+    if (!confirmed) {
+      setLoading(false);
+      return;
+    }
+
     const docId = targetStaffId === 'all' ? dateString : `${dateString}_${targetStaffId}`;
     const specialDayData: SpecialDay & { staffId?: string | null } = {
       date: dateString,
       isClosed,
       openingHours: isClosed ? [] : openingHours,
-      staffId: targetStaffId === 'all' ? null : targetStaffId
+      staffId: targetStaffId === 'all' ? null : targetStaffId,
+      // 🚀 AUDIT MINIMO: chi ha creato/modificato (i doc vecchi non hanno questi campi)
+      createdAt: existingMeta?.createdAt || Timestamp.now(),
+      createdBy: existingMeta?.createdBy || profile?.uid || 'sconosciuto',
+      updatedAt: Timestamp.now()
     };
 
     try {
@@ -177,8 +256,8 @@ export default function ScheduleMaintenanceModal({ onClose }: Props) {
   };
 
   const handleDelete = async () => {
-    if (!tenantId) return;
-    if (!window.confirm("Vuoi ripristinare l'orario standard per questo giorno?")) return;
+    if (!tenantId || !existingException) return;
+    if (!window.confirm(`Vuoi eliminare l'eccezione del ${format(selectedDate, 'dd/MM/yyyy')} e tornare all'orario standard (${standardLabel})?`)) return;
     setLoading(true);
     const dateString = format(selectedDate, 'yyyy-MM-dd');
     const docId = targetStaffId === 'all' ? dateString : `${dateString}_${targetStaffId}`;
@@ -287,17 +366,55 @@ export default function ScheduleMaintenanceModal({ onClose }: Props) {
               Impostazioni per il {format(selectedDate, 'dd/MM/yyyy')}
             </h3>
 
-            <div className="flex items-center justify-between p-4 bg-gray-50 rounded-xl border border-gray-200">
-              <span className="font-bold text-gray-700">
-                {targetStaffId === 'all' ? 'Chiuso tutto il giorno' : 'Assente / Non disponibile'}
-              </span>
-              <input
-                type="checkbox"
-                checked={isClosed}
-                onChange={(e) => setIsClosed(e.target.checked)}
-                className="w-6 h-6 rounded text-black focus:ring-black cursor-pointer"
-              />
+            {/* 🚀 RIFERIMENTO: orario standard del giorno (questo modal non lo modifica mai) */}
+            <div className="p-4 bg-gray-50 rounded-xl border border-gray-200">
+              <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                Orario standard del {format(selectedDate, 'EEEE', { locale: it })}
+              </div>
+              <div className="font-bold text-gray-800 mt-1">{standardLabel}</div>
+              <div className="text-[11px] text-gray-400 mt-0.5">
+                Vale per tutte le settimane. Un'eccezione cambia solo questo giorno.
+              </div>
             </div>
+
+            {!isExceptionMode ? (
+              <div className="p-5 rounded-2xl border-2 border-dashed border-gray-200 text-center space-y-3 animate-in fade-in">
+                <p className="text-sm text-gray-500 leading-relaxed">
+                  Nessuna eccezione per questo giorno: si applica l'<strong>orario standard</strong>.
+                </p>
+                <button
+                  onClick={enterExceptionMode}
+                  className="w-full py-3 bg-black text-white rounded-xl font-bold hover:bg-gray-800 transition-all active:scale-[0.98] flex items-center justify-center gap-2"
+                >
+                  <Plus size={18} /> Crea eccezione per il {format(selectedDate, 'd MMMM', { locale: it })}
+                </button>
+              </div>
+            ) : (
+              <>
+                {/* 🚀 BADGE ECCEZIONE: rende evidente che NON si sta toccando lo standard */}
+                <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl flex items-start gap-3">
+                  <AlertTriangle size={18} className="text-amber-500 shrink-0 mt-0.5" />
+                  <div className="text-xs leading-relaxed text-amber-900">
+                    <div className="font-black uppercase tracking-wider">
+                      {existingException ? "Stai modificando un'eccezione" : "Stai creando un'ECCEZIONE"}
+                    </div>
+                    <div>
+                      Vale <strong>solo</strong> per il {format(selectedDate, 'd MMMM yyyy', { locale: it })}. L'orario standard resta <strong>{standardLabel}</strong>.
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between p-4 bg-gray-50 rounded-xl border border-gray-200">
+                  <span className="font-bold text-gray-700">
+                    {targetStaffId === 'all' ? 'Chiuso tutto il giorno' : 'Assente / Non disponibile'}
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={isClosed}
+                    onChange={(e) => handleClosedToggle(e.target.checked)}
+                    className="w-6 h-6 rounded text-black focus:ring-black cursor-pointer"
+                  />
+                </div>
 
             {!isClosed && (
               <div className="space-y-4 animate-in fade-in">
@@ -335,25 +452,33 @@ export default function ScheduleMaintenanceModal({ onClose }: Props) {
                 )}
               </div>
             )}
+              </>
+            )}
           </div>
         </div>
 
-        <div className="p-6 border-t border-gray-100 flex gap-3 bg-gray-50 sticky bottom-0 shrink-0">
-          <button
-            disabled={loading}
-            onClick={handleDelete}
-            className="px-6 py-4 bg-white border border-gray-200 text-red-600 rounded-2xl font-bold hover:bg-red-50 transition-all flex items-center gap-2"
-          >
-            <Trash2 size={20} /> Ripristina
-          </button>
-          <button
-            disabled={loading}
-            onClick={handleSave}
-            className="flex-1 py-4 bg-black text-white rounded-2xl font-bold hover:bg-gray-800 transition-all flex items-center justify-center gap-2 shadow-xl"
-          >
-            <Save size={20} /> {loading ? 'Salvataggio...' : 'Salva Regola'}
-          </button>
-        </div>
+        {(isExceptionMode || existingException) && (
+          <div className="p-6 border-t border-gray-100 flex gap-3 bg-gray-50 sticky bottom-0 shrink-0">
+            {existingException && (
+              <button
+                disabled={loading}
+                onClick={handleDelete}
+                className="px-6 py-4 bg-white border border-gray-200 text-red-600 rounded-2xl font-bold hover:bg-red-50 transition-all flex items-center gap-2"
+              >
+                <Trash2 size={20} /> Ripristina
+              </button>
+            )}
+            {isExceptionMode && (
+              <button
+                disabled={loading}
+                onClick={handleSave}
+                className="flex-1 py-4 bg-black text-white rounded-2xl font-bold hover:bg-gray-800 transition-all flex items-center justify-center gap-2 shadow-xl"
+              >
+                <Save size={20} /> {loading ? 'Salvataggio...' : existingException ? 'Aggiorna Eccezione' : 'Salva Eccezione'}
+              </button>
+            )}
+          </div>
+        )}
 
         {isScheduleSettingsOpen && (
           <ScheduleSettingsModal onClose={() => setIsScheduleSettingsOpen(false)} />
