@@ -6,7 +6,6 @@ import { it } from 'date-fns/locale';
 import { DayPicker } from 'react-day-picker';
 import ScheduleSettingsModal from './ScheduleSettingsModal';
 import { XCircle, Settings, Calendar as CalendarIcon, Save, Trash2, Users, Lock, AlertTriangle, Plus } from 'lucide-react';
-import { cn } from '../lib/utils';
 import { SpecialDay, Appointment, StaffProfile } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { useSalonSettings } from '../hooks/useSalonSettings';

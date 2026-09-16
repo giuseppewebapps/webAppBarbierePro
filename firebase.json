@@ -14,7 +14,7 @@
     ]
   },
   "firestore": {
-    "database": "ai-studio-69c397c7-dabe-4360-97cc-9daeef64c499",
+    "database": "(default)",
     "location": "europe-west3",
     "rules": "firestore.rules",
     "indexes": "firestore.indexes.json"
