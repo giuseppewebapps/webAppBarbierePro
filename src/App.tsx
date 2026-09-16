@@ -36,6 +36,7 @@ import { logSystemError } from './utils/logger';
 import { getTenantId } from './utils/tenantResolver';
 import { AuthContext } from './context/AuthContext';
 import { useSalonSettings } from './hooks/useSalonSettings';
+import { useCurrentStaff } from './hooks/useCurrentStaff';
 
 // 🔴 KILL SWITCH MANUTENZIONE: Metti a true per bloccare temporaneamente l'app per aggiornamenti
 const MAINTENANCE_MODE = false;
@@ -56,6 +57,9 @@ export default function App() {
   
   // Custom Hook per impostazioni salone
   const { settings: salonSettings, loading: settingsLoading } = useSalonSettings(tenantId);
+
+  // Nome dello staff loggato (owner/barbiere) per l'header — fallback a profile.displayName
+  const staffName = useCurrentStaff(tenantId, profile?.uid, profile?.role === 'barber');
 
   const [name, setName] = useState('');
   const [phoneNumber, setPhoneNumber] = useState('');
@@ -502,7 +506,7 @@ export default function App() {
                     <div>
                       <h1 className="text-lg font-bold tracking-tight">{salonName}</h1>
                       <p className="text-[10px] text-gray-400 uppercase tracking-widest">
-                        {profile?.role === 'barber' ? 'Calendario Appuntamenti' : `Ciao, ${profile?.displayName}`}
+                        {profile?.role === 'barber' ? `Ciao, ${staffName || profile?.displayName}` : `Ciao, ${profile?.displayName}`}
                       </p>
                     </div>
                   </div>
