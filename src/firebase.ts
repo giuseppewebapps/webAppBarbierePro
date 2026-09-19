@@ -11,6 +11,16 @@ const firebaseConfig = {
   messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID as string,
 };
 
+// 🔴 Database Firestore ESPLICITO:
+// - se la variabile manca, è vuota o vale "(default)" → database di default (comportamento storico)
+// - se contiene un id diverso (progetto con database "nominato") → passiamo l'id all'SDK
+// Le virgolette vengono normalizzate: su Vercel un valore incollato come "(default)"
+// diventerebbe altrimenti il nome di un database inesistente.
+const rawDatabaseId = (import.meta.env.VITE_FIREBASE_FIRESTORE_DATABASE_ID as string | undefined)
+  ?.trim()
+  .replace(/^["']|["']$/g, '');
+const namedDatabaseId = rawDatabaseId && rawDatabaseId !== '(default)' ? rawDatabaseId : null;
+
 const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app);
+export const db = namedDatabaseId ? getFirestore(app, namedDatabaseId) : getFirestore(app);
 export const auth = getAuth(app);

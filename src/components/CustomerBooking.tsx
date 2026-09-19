@@ -46,15 +46,18 @@ import {
   AlertCircle,
   Globe,
   ArrowUpCircle,
+  ArrowDownCircle,
   ChevronDown,
   Mail,
   Instagram,
-  MessageCircle
+  MessageCircle,
+  Users,
+  User
 } from 'lucide-react';
 import { cn } from '../lib/utils';
-import { COUNTRY_CODES } from '../constants'; // Manteniamo solo i dati globali
-import { Appointment, Service, RescheduleProposal, SpecialDay, TimeRange } from '../types';
-import { calculateOptimalSlots } from '../utils/slotEngine';
+import { COUNTRY_CODES } from '../constants';
+import { Appointment, Service, RescheduleProposal, SpecialDay, TimeRange, StaffProfile, ProposalType } from '../types';
+import { calculateMultiStaffSlots, Shift as SlotShift } from '../utils/slotEngine'; // 🚀 IMPORTATO IL NUOVO MOTORE
 
 enum OperationType {
   CREATE = 'create',
@@ -171,14 +174,16 @@ export default function CustomerBooking({
 }: CustomerBookingProps) {
   
   const { profile, tenantId } = useAuth();
-  
-  // 🚀 Unica fonte di verità per le impostazioni SaaS
   const { settings: salonSettings } = useSalonSettings(tenantId);
 
   const [showCalendar, setShowCalendar] = useState(false);
   const [selectedServices, setSelectedServices] = useState<Service[]>([]);
   const [specialDays, setSpecialDays] = useState<SpecialDay[]>([]);
   
+  // 🚀 STATO MULTI-STAFF
+  const [staffMembers, setStaffMembers] = useState<StaffProfile[]>([]);
+  const [selectedStaffId, setSelectedStaffId] = useState<string | null>(null);
+
   const MAX_BOOKING_DAYS = 30;
   const { todayNormalized, maxBookingDate } = useMemo(() => {
     const today = startOfDay(new Date());
@@ -199,7 +204,7 @@ export default function CustomerBooking({
     return days.filter(d => {
       if (isAfter(d, maxBookingDate)) return false;
       const dateString = format(d, 'yyyy-MM-dd');
-      const exception = specialDays.find(ex => ex.date === dateString);
+      const exception = specialDays.find(ex => ex.date === dateString && !(ex as any).staffId);
       if (exception) return !exception.isClosed;
       return salonSettings.weeklySchedule[getDay(d)]?.isOpen;
     });
@@ -211,6 +216,21 @@ export default function CustomerBooking({
 
   const [fullyBookedDays, setFullyBookedDays] = useState<string[]>([]);
   const [isScanningDays, setIsScanningDays] = useState(false);
+
+  // 🚀 CARICAMENTO STAFF
+  useEffect(() => {
+    if (!tenantId || !salonSettings?.hasMultiStaff) {
+      setStaffMembers([]);
+      return;
+    }
+    const fetchStaff = async () => {
+      const q = query(collection(db, 'salons', tenantId, 'staff'), where('active', '==', true));
+      const snap = await getDocs(q);
+      const staffList = snap.docs.map(d => d.data() as StaffProfile).sort((a, b) => a.order - b.order);
+      setStaffMembers(staffList);
+    };
+    fetchStaff();
+  }, [tenantId, salonSettings?.hasMultiStaff]);
 
   // Scansione giorni pieni
   useEffect(() => {
@@ -236,10 +256,6 @@ export default function CustomerBooking({
         const snap = await getDocs(q);
         const windowApps = snap.docs.map(doc => doc.data() as Appointment);
 
-        const totalDuration = selectedServices.reduce((acc, s) => acc + s.duration, 0);
-        const totalFlexibility = selectedServices.reduce((acc, s) => acc + (s.flexibility || 0), 0);
-        const requestedService = { id: 'combo', duration: totalDuration, flexibility: totalFlexibility };
-
         const mappedCatalog = salonSettings.services.map(s => ({
           id: s.id,
           duration: s.duration,
@@ -252,52 +268,55 @@ export default function CustomerBooking({
         for (const day of visibleDays) {
           const dateString = format(day, 'yyyy-MM-dd');
           const dayOfWeek = getDay(day);
-          const exception = specialDays.find(ex => ex.date === dateString);
-          
-          let activeHours: TimeRange[] = [];
-          if (exception && !exception.isClosed) {
-            activeHours = exception.openingHours?.length ? exception.openingHours : (salonSettings.weeklySchedule[dayOfWeek]?.shifts || []);
-          } else if (salonSettings.weeklySchedule[dayOfWeek]?.isOpen) {
-            activeHours = salonSettings.weeklySchedule[dayOfWeek].shifts;
+
+          if (isSalonClosedOn(dateString)) {
+            busyDays.push(dateString);
+            continue;
           }
+
+          const dateAvailableStaff = availableStaffForDate(dateString, staffMembers);
 
           const dayStartMs = startOfDay(day).getTime();
           const dayEndMs = endOfDay(day).getTime();
           const dayApps = windowApps.filter(app => {
             const t = app.startTime.toDate().getTime();
             return t >= dayStartMs && t <= dayEndMs;
-          }).map(app => {
-            const actualDur = (app.endTime.toDate().getTime() - app.startTime.toDate().getTime()) / 60000;
-            const nomDur = app.services?.reduce((acc: number, s: any) => acc + s.duration, 0) || actualDur;
-            return {
-              start: app.startTime.toDate(),
-              end: app.endTime.toDate(),
-              isCompressed: actualDur < nomDur
-            };
           });
 
           let slotsFound = 0;
 
-          activeHours.forEach(range => {
-            const sH = Math.floor(range.start);
-            const sM = Math.round((range.start - sH) * 60);
-            const shiftStart = setMinutes(setHours(day, sH), sM);
+          if (staffMembers.length === 0) {
+            // 🏠 MONO-SALONE (nessuno staff configurato): orari del salone, motore legacy
+            shiftsForDay(hoursForStaff('', dateString, dayOfWeek), day).forEach(window => {
+              const salonSlots = calculateMultiStaffSlots(
+                selectedServices, mappedCatalog, dayApps, [], selectedStaffId,
+                { start: window.start, end: window.end }, salonSettings.yieldConfig, false
+              );
+              slotsFound += (isSameDay(day, now) ? salonSlots.filter(s => isAfter(s, now)) : salonSlots).length;
+            });
+          } else if (dateAvailableStaff.length > 0) {
+            // Turni per-barbiere per questo giorno (orari ridotti/assenza gestiti da hoursForStaff)
+            const staffShifts: Record<string, SlotShift[]> = {};
+            dateAvailableStaff.forEach(st => {
+              staffShifts[st.uid] = shiftsForDay(hoursForStaff(st.uid, dateString, dayOfWeek), day);
+            });
 
-            const eH = Math.floor(range.end);
-            const eM = Math.round((range.end - eH) * 60);
-            const shiftEnd = setMinutes(setHours(day, eH), eM);
-
-            const slots = calculateOptimalSlots(
-              requestedService, 
+            // 🚀 CHIAMATA AL NUOVO MOTORE MULTI-POSTAZIONE (con turni per barbiere)
+            const slots = calculateMultiStaffSlots(
+              selectedServices, 
               mappedCatalog, 
               dayApps, 
-              { start: shiftStart, end: shiftEnd },
-              salonSettings.yieldConfig // 🚀 Passaggio regole dinamiche
+              dateAvailableStaff,
+              selectedStaffId,
+              { start: setHours(startOfDay(day), 8), end: setHours(startOfDay(day), 20) },
+              salonSettings.yieldConfig,
+              false,
+              staffShifts
             );
             
             const validSlots = isSameDay(day, now) ? slots.filter(s => isAfter(s, now)) : slots;
             slotsFound += validSlots.length;
-          });
+          }
 
           if (slotsFound === 0) {
             busyDays.push(dateString);
@@ -313,7 +332,7 @@ export default function CustomerBooking({
     };
 
     scanVisibleDays();
-  }, [selectedServices, visibleDays, salonSettings, specialDays, tenantId]);
+  }, [selectedServices, visibleDays, salonSettings, specialDays, tenantId, staffMembers, selectedStaffId]);
   
   const [phonePrefix, setPhonePrefix] = useState('+39');
   const [phoneNumber, setPhoneNumber] = useState('');
@@ -434,7 +453,7 @@ export default function CustomerBooking({
     } else {
       setAvailableSlots([]);
     }
-  }, [selectedDate, selectedServices, salonSettings?.weeklySchedule]);
+  }, [selectedDate, selectedServices, salonSettings?.weeklySchedule, selectedStaffId]); // Ricalcola se cambia il barbiere
 
   useEffect(() => {
     if (selectedAppointmentId) {
@@ -469,6 +488,55 @@ export default function CustomerBooking({
     return () => unsubscribe();
   }, [tenantId]);
 
+  // 🚀 HELPER DISPONIBILITÀ E ORARI PER-DATA (eccezioni globali vs per-barbiere)
+  const isSalonClosedOn = (dateString: string): boolean => {
+    const globalEx = specialDays.find(ex => ex.date === dateString && !(ex as any).staffId);
+    if (globalEx) return globalEx.isClosed;
+    return !(salonSettings?.weeklySchedule?.[getDay(new Date(dateString + 'T00:00:00'))]?.isOpen);
+  };
+
+  const isStaffAbsentOn = (staffId: string, dateString: string): boolean => {
+    const staffEx = specialDays.find(ex => ex.date === dateString && (ex as any).staffId === staffId);
+    return staffEx ? staffEx.isClosed : false;
+  };
+
+  // Orari del barbiere per una data: eccezione per-singolo > eccezione globale > orari settimanali
+  const hoursForStaff = (staffId: string, dateString: string, dayOfWeek: number): TimeRange[] => {
+    const weeklyHours = salonSettings?.weeklySchedule?.[dayOfWeek]?.shifts || [];
+
+    // 1. Eccezione specifica del barbiere
+    const staffEx = specialDays.find(ex => ex.date === dateString && (ex as any).staffId === staffId);
+    if (staffEx) {
+      if (staffEx.isClosed) return [];
+      return staffEx.openingHours?.length ? staffEx.openingHours : weeklyHours;
+    }
+
+    // 2. Eccezione del salone (globale): orari ridotti valgono per tutti
+    const globalEx = specialDays.find(ex => ex.date === dateString && !(ex as any).staffId);
+    if (globalEx) {
+      if (globalEx.isClosed) return [];
+      return globalEx.openingHours?.length ? globalEx.openingHours : weeklyHours;
+    }
+
+    return weeklyHours;
+  };
+
+  const availableStaffForDate = (dateString: string, staff: StaffProfile[]): StaffProfile[] =>
+    staff.filter(s => !isStaffAbsentOn(s.uid, dateString));
+
+  // Converte gli orari (number[]) in turni Date[] relativi al giorno
+  const shiftsForDay = (hours: TimeRange[], day: Date): SlotShift[] =>
+    hours.map(range => {
+      const sH = Math.floor(range.start);
+      const sM = Math.round((range.start - sH) * 60);
+      const eH = Math.floor(range.end);
+      const eM = Math.round((range.end - eH) * 60);
+      return {
+        start: setMinutes(setHours(day, sH), sM),
+        end: setMinutes(setHours(day, eH), eM)
+      };
+    });
+
   const calculateSlots = async () => {
     if (!tenantId || !salonSettings?.yieldConfig || !salonSettings?.services || !salonSettings?.weeklySchedule) return;
     setLoading(true);
@@ -477,20 +545,14 @@ export default function CustomerBooking({
 
     const dateString = format(selectedDate, 'yyyy-MM-dd');
     const dayOfWeek = getDay(selectedDate);
-    const exceptionForToday = specialDays.find(ex => ex.date === dateString);
 
-    if (exceptionForToday?.isClosed || (!exceptionForToday && !salonSettings.weeklySchedule[dayOfWeek]?.isOpen)) {
+    if (isSalonClosedOn(dateString)) {
       setAvailableSlots([]);
       setLoading(false);
       return;
     }
 
-    let activeOpeningHours: TimeRange[] = [];
-    if (exceptionForToday && !exceptionForToday.isClosed) {
-      activeOpeningHours = exceptionForToday.openingHours?.length ? exceptionForToday.openingHours : (salonSettings.weeklySchedule[dayOfWeek]?.shifts || []);
-    } else {
-      activeOpeningHours = salonSettings.weeklySchedule[dayOfWeek]?.shifts || [];
-    }
+    const dateAvailableStaff = availableStaffForDate(dateString, staffMembers);
 
     try {
       const q = query(
@@ -503,52 +565,53 @@ export default function CustomerBooking({
         .map(doc => doc.data() as Appointment)
         .filter(app => app.status === 'booked');
 
-      const mappedAppointments = dayAppointments.map(app => {
-        const actualDuration = (app.endTime.toDate().getTime() - app.startTime.toDate().getTime()) / 60000;
-        const nominalDuration = app.services.reduce((acc, s) => acc + s.duration, 0);
-        return {
-          start: app.startTime.toDate(),
-          end: app.endTime.toDate(),
-          isCompressed: actualDuration < nominalDuration
-        };
-      });
-
       const mappedCatalog = salonSettings.services.map(s => ({
         id: s.id,
         duration: s.duration,
         flexibility: s.flexibility || 0 
       }));
 
-      const totalDuration = selectedServices.reduce((acc, s) => acc + s.duration, 0);
-      const totalFlexibility = selectedServices.reduce((acc, s) => acc + (s.flexibility || 0), 0);
+      // 🏠 MONO-SALONE (nessuno staff configurato): orari del salone, motore legacy
+      if (staffMembers.length === 0) {
+        let legacySlots: Date[] = [];
+        shiftsForDay(hoursForStaff('', dateString, dayOfWeek), dayStart).forEach(window => {
+          legacySlots = [...legacySlots, ...calculateMultiStaffSlots(
+            selectedServices, mappedCatalog, dayAppointments, [], selectedStaffId,
+            { start: window.start, end: window.end }, salonSettings.yieldConfig, false
+          )];
+        });
+        const uniqueLegacySlots = Array.from(new Set(legacySlots.map(d => d.getTime())))
+          .map(time => new Date(time))
+          .sort((a, b) => a.getTime() - b.getTime());
+        setAvailableSlots(uniqueLegacySlots.filter(slot => isAfter(slot, new Date())));
+        return;
+      }
 
-      const requestedService = {
-        id: 'custom_combo',
-        duration: totalDuration,
-        flexibility: totalFlexibility
-      };
+      // Se nessun barbiere è disponibile quel giorno -> nessuno slot
+      if (dateAvailableStaff.length === 0) {
+        setAvailableSlots([]);
+        setLoading(false);
+        return;
+      }
 
-      let allValidSlots: Date[] = [];
-
-      activeOpeningHours.forEach(range => {
-        const startHour = Math.floor(range.start);
-        const startMin = Math.round((range.start - startHour) * 60);
-        const shiftStart = setMinutes(setHours(dayStart, startHour), startMin);
-
-        const endHour = Math.floor(range.end);
-        const endMin = Math.round((range.end - endHour) * 60);
-        const shiftEnd = setMinutes(setHours(dayStart, endHour), endMin);
-
-        const shiftSlots = calculateOptimalSlots(
-          requestedService,
-          mappedCatalog,
-          mappedAppointments,
-          { start: shiftStart, end: shiftEnd },
-          salonSettings.yieldConfig
-        );
-
-        allValidSlots = [...allValidSlots, ...shiftSlots];
+      // Turni per-barbiere (orari ridotti/assenza gestiti da hoursForStaff)
+      const staffShifts: Record<string, SlotShift[]> = {};
+      dateAvailableStaff.forEach(st => {
+        staffShifts[st.uid] = shiftsForDay(hoursForStaff(st.uid, dateString, dayOfWeek), dayStart);
       });
+
+      // 🚀 CHIAMATA AL NUOVO MOTORE MULTI-POSTAZIONE (con turni per barbiere)
+      const allValidSlots = calculateMultiStaffSlots(
+        selectedServices, 
+        mappedCatalog, 
+        dayAppointments, 
+        dateAvailableStaff,
+        selectedStaffId,
+        { start: setHours(dayStart, 8), end: setHours(dayStart, 20) },
+        salonSettings.yieldConfig,
+        false,
+        staffShifts
+      );
 
       const uniqueSortedSlots = Array.from(new Set(allValidSlots.map(d => d.getTime())))
         .map(time => new Date(time))
@@ -570,6 +633,24 @@ export default function CustomerBooking({
       setSelectedServices([...selectedServices, service]);
     }
     setSelectedSlot(null);
+  };
+
+  // 🚀 GESTIONE CAMBIO OPERATORE (Reset a cascata)
+  const handleStaffSelection = (staffId: string | null) => {
+    if (selectedStaffId === staffId) return;
+    setSelectedStaffId(staffId);
+    
+    // Controlla se i servizi attualmente selezionati sono ancora validi
+    if (staffId) {
+      const selectedStaff = staffMembers.find(s => s.uid === staffId);
+      if (selectedStaff) {
+        const stillValidServices = selectedServices.filter(s => selectedStaff.assignedServices.includes(s.id));
+        if (stillValidServices.length !== selectedServices.length) {
+          setSelectedServices(stillValidServices); // Deseleziona i servizi che non sa fare
+        }
+      }
+    }
+    setSelectedSlot(null); // Svuota l'orario, va ricalcolato
   };
 
   const handleBooking = async (shouldUpdateProfilePhone: boolean = false) => {
@@ -623,15 +704,69 @@ export default function CustomerBooking({
       const daySnap = await getDocs(qDay);
       const dayApps = daySnap.docs.map(d => d.data() as Appointment).sort((a, b) => a.startTime.toMillis() - b.startTime.toMillis());
 
-      if (dayApps.some(a => a.startTime.toMillis() === selectedSlot.getTime())) {
-        alert("Prenotazione non riuscita: questo slot è già stato prenotato. La pagina verrà ricaricata.");
+      // 🚀 PROTEZIONE SOVRAPPOSIZIONI CON RE-CHECK MATRICIALE
+      const mappedCatalog = salonSettings.services.map(s => ({
+        id: s.id, duration: s.duration, flexibility: s.flexibility || 0
+      }));
+      
+      const validationSlots = calculateMultiStaffSlots(
+        selectedServices,
+        mappedCatalog,
+        dayApps,
+        staffMembers,
+        selectedStaffId,
+        { start: selectedSlot, end: addMinutes(selectedSlot, totalDuration) }, // Check isolato
+        salonSettings.yieldConfig
+      );
+
+      // Se il motore restituisce 0 slot per quell'orario esatto, qualcuno lo ha rubato
+      const isSlotStillAvailable = validationSlots.some(s => s.getTime() === selectedSlot.getTime());
+
+      if (!isSlotStillAvailable && dayApps.length > 0) {
+        alert("Prenotazione non riuscita: l'orario richiesto è stato appena prenotato da qualcun altro. La pagina verrà ricaricata.");
         window.location.reload();
         return;
       }
 
+    // 🚀 ASSEGNAZIONE SILENZIOSA (Chi esegue il servizio se il cliente ha scelto Qualsiasi?)
+    let assignedStaffId = selectedStaffId;
+    let isRandom = false;
+
+    // Data della prenotazione (per escludere l'assenza del giorno dal sorteggio)
+    const bookingDateString = format(selectedSlot, 'yyyy-MM-dd');
+
+    if (!selectedStaffId && staffMembers.length > 0) {
+      isRandom = true;
+      const requestedIds = selectedServices.map(s => s.id);
+      
+      // Ritrova i barbieri idonei per questo preciso incastro (escludendo chi è assente quel giorno)
+      const eligibleStaff = availableStaffForDate(bookingDateString, staffMembers).filter(staff => 
+        requestedIds.every(id => staff.assignedServices.includes(id))
+      ).sort((a, b) => a.order - b.order);
+
+      // Scorre le agende per vedere chi è libero in quello slot
+      for (const staff of eligibleStaff) {
+        const staffApps = dayApps.filter(app => app.staffId === staff.uid || !app.staffId);
+        
+        // Verifica se il barbiere ha buchi che sovrappongono
+        const conflict = staffApps.some(app => {
+          const appStart = app.startTime.toDate().getTime();
+          const appEnd = app.endTime.toDate().getTime();
+          const reqStart = selectedSlot.getTime();
+          const reqEnd = addMinutes(selectedSlot, totalDuration).getTime();
+          return reqStart < appEnd && reqEnd > appStart;
+        });
+
+        if (!conflict) {
+          assignedStaffId = staff.uid;
+          break; // Assegna al primo idoneo libero e scappa
+        }
+      }
+    }
+
     const dateString = format(selectedSlot, 'yyyy-MM-dd');
     const dayOfWeek = getDay(selectedSlot);
-    const exception = specialDays.find(ex => ex.date === dateString);
+    const exception = specialDays.find(ex => ex.date === dateString && !(ex as any).staffId);
     
     let activeHours: TimeRange[] = [];
     if (exception && !exception.isClosed) {
@@ -651,7 +786,11 @@ export default function CustomerBooking({
         }
       }
 
-      const nextApp = dayApps.find(a => a.startTime.toMillis() > selectedSlot.getTime());
+      // Protezione fine turno
+      const nextApp = assignedStaffId 
+        ? dayApps.find(a => a.staffId === assignedStaffId && a.startTime.toMillis() > selectedSlot.getTime())
+        : dayApps.find(a => a.startTime.toMillis() > selectedSlot.getTime());
+
       const obstacleTime = nextApp && isBefore(nextApp.startTime.toDate(), shiftEnd) ? nextApp.startTime.toDate() : shiftEnd;
       
       const availableMins = (obstacleTime.getTime() - selectedSlot.getTime()) / 60000;
@@ -694,8 +833,11 @@ export default function CustomerBooking({
         console.warn("Could not clean up active proposals:", err);
       }
 
+      // 🚀 SALVATAGGIO CON MULTI-POSTAZIONE
       const appointmentData: any = {
         customerId: profile.uid,
+        staffId: assignedStaffId || null,
+        isStaffRandom: isRandom,
         services: selectedServices,
         startTime: Timestamp.fromDate(selectedSlot),
         endTime: Timestamp.fromDate(endTime),
@@ -716,6 +858,7 @@ export default function CustomerBooking({
 
       const appointmentRef = await addDoc(collection(db, 'salons', tenantId, 'appointments'), appointmentData);
       
+      // Notifiche
       try {
         const barberSnapshot = await getDocs(query(collection(db, 'users'), where('role', '==', 'barber')));
         for (const barberDoc of barberSnapshot.docs) {
@@ -733,14 +876,15 @@ export default function CustomerBooking({
         console.warn("Could not notify barber:", err);
       }
       
+      const assignedStaffName = staffMembers.find(s => s.uid === assignedStaffId)?.displayName || 'Qualsiasi operatore';
       notifySystemByEmail({
         type: 'new_booking',
         customerName: isForFriend ? `${friendFirstName} ${friendLastName}` : (profile?.displayName || 'Cliente'),
         date: format(selectedSlot, 'dd/MM/yyyy'),
         time: format(selectedSlot, 'HH:mm'),
-        services: selectedServices.map(s => s.name).join(', '),
+        services: `${selectedServices.map(s => s.name).join(', ')} (Con: ${assignedStaffName})`,
         tenantId,
-        targetEmail: salonSettings?.notificationEmail // 🚀 Notifica al proprietario corretto
+        targetEmail: salonSettings?.notificationEmail
       });
 
       if (shouldUpdateProfilePhone && newPhoneNumberToUpdate) {
@@ -761,6 +905,7 @@ export default function CustomerBooking({
       setNewPhoneNumberToUpdate(null);
       setSelectedServices([]);
       setSelectedSlot(null);
+      setSelectedStaffId(null);
 
       setTimeout(() => {
         setBookingSuccess(false);
@@ -881,6 +1026,9 @@ export default function CustomerBooking({
           newEndTime = new Date(newStartTime.getTime() + duration);
         }
 
+        // Barbiere di destinazione: quello del buco se proposto, altrimenti quello originario
+        const targetStaffId = currentTarget.proposedStaffId || myApp.staffId || undefined;
+
         const conflictQuery = query(
           collection(db, 'salons', tenantId, 'appointments'),
           where('status', '==', 'booked'),
@@ -888,7 +1036,15 @@ export default function CustomerBooking({
           where('endTime', '>', Timestamp.fromDate(newStartTime))
         );
         const conflictSnap = await getDocs(conflictQuery);
-        const realConflicts = conflictSnap.docs.filter(d => d.id !== currentTarget.appointmentId);
+        // Filtra considerando la colonna del barbiere target (il buco scelto dal barbiere)
+        const realConflicts = conflictSnap.docs.filter(d => {
+          if (d.id === currentTarget.appointmentId) return false;
+          const conflictApp = d.data() as Appointment;
+          // Senza barbiere target noto (dataset legacy): blocco solo se anche il sovrapposto è senza staffId
+          if (!targetStaffId) return !conflictApp.staffId;
+          // Con barbiere target noto: conflitto SOLO se è proprio la colonna del barbiere di destinazione
+          return !!conflictApp.staffId && conflictApp.staffId === targetStaffId;
+        });
         
         if (realConflicts.length > 0) {
           alert("Spiacenti, questo orario non è più disponibile perché il barbiere ha già riempito lo spazio. L'appuntamento rimarrà al tuo orario originale.");
@@ -899,12 +1055,23 @@ export default function CustomerBooking({
           return; 
         }
 
-        await updateDoc(doc(db, 'salons', tenantId, 'appointments', currentTarget.appointmentId), {
+        // Aggiorna l'appuntamento; se il buco prevede un cambio barbiere, riassegna lo staffId
+        const updatePayload: {
+          startTime: any;
+          endTime: any;
+          status: string;
+          updatedAt: any;
+          staffId?: string;
+        } = {
           startTime: Timestamp.fromDate(newStartTime),
           endTime: Timestamp.fromDate(newEndTime),
           status: 'booked',
           updatedAt: Timestamp.now()
-        });
+        };
+        if (currentTarget.proposedStaffId) {
+          updatePayload.staffId = currentTarget.proposedStaffId;
+        }
+        await updateDoc(doc(db, 'salons', tenantId, 'appointments', currentTarget.appointmentId), updatePayload);
 
         if (freshProposal.gapAppointmentId) {
           try {
@@ -973,10 +1140,13 @@ export default function CustomerBooking({
             currentIdx: nextIdx
           });
 
+          const nextTarget = updatedTargets[nextIdx];
+          const nextProposalType = getProposalType(freshProposal, nextTarget);
+          const nextDirectionText = nextProposalType === 'posticipo' ? 'posticipare' : nextProposalType === 'cambio' ? 'cambiare orario' : 'anticipare';
           await addDoc(collection(db, 'salons', tenantId, 'notifications'), {
-            userId: updatedTargets[nextIdx].userId,
+            userId: nextTarget.userId,
             title: 'Proposta di Cambio Orario',
-            message: `Il barbiere ti propone un anticipo! Hai 15 minuti per accettare.`,
+            message: `Il barbiere ti propone di ${nextDirectionText}! Hai 15 minuti per accettare.`,
             type: 'reschedule_proposal',
             read: false,
             createdAt: Timestamp.now(),
@@ -1060,6 +1230,18 @@ export default function CustomerBooking({
     }
   };
 
+  const getProposalType = (proposal: RescheduleProposal, target?: RescheduleProposal['targets'][0]): ProposalType => {
+    const t = target || proposal.targets[proposal.currentIdx];
+    if (t.type) return t.type;
+    const originalApp = myAppointments.find(a => a.id === t.appointmentId);
+    const proposed = (t.proposedStartTime || proposal.gapStartTime).toDate();
+    const original = originalApp?.startTime.toDate();
+    if (!original) return 'cambio';
+    if (proposed.getTime() < original.getTime()) return 'anticipo';
+    if (proposed.getTime() > original.getTime()) return 'posticipo';
+    return 'cambio';
+  };
+
   const disabledDays = useMemo(() => {
     return (date: Date) => {
       if (isBefore(startOfDay(date), todayNormalized)) return true;
@@ -1067,7 +1249,7 @@ export default function CustomerBooking({
 
       const dateString = format(date, 'yyyy-MM-dd');
       
-      const exception = specialDays.find(ex => ex.date === dateString);
+      const exception = specialDays.find(ex => ex.date === dateString && !(ex as any).staffId);
       if (exception) {
         if (exception.isClosed) return true; 
         if (fullyBookedDays.includes(dateString)) return true; 
@@ -1097,6 +1279,19 @@ export default function CustomerBooking({
     )
     .sort((a, b) => b.startTime.toMillis() - a.startTime.toMillis())
     .slice(0, 10);
+
+  // 🚀 Variabile di supporto per capire quali servizi far vedere in base al barbiere scelto
+  const displayedServices = useMemo(() => {
+    if (!salonSettings?.services) return [];
+    if (!selectedStaffId) return salonSettings.services; // Se sceglie "Qualsiasi", mostra tutto
+    
+    const selectedStaff = staffMembers.find(s => s.uid === selectedStaffId);
+    if (!selectedStaff) return salonSettings.services;
+
+    return salonSettings.services.filter(service => 
+      selectedStaff.assignedServices.includes(service.id)
+    );
+  }, [selectedStaffId, salonSettings?.services, staffMembers]);
 
   return (
     <div className="max-w-4xl mx-auto pb-32 px-4 sm:px-6 overflow-x-hidden w-full">
@@ -1132,11 +1327,15 @@ export default function CustomerBooking({
       </div>
 
       {activeTab === 'booking' && (
-        <div className="space-y-12 animate-in fade-in duration-500">
-          {/* Reschedule Proposals */}
+        <div className="space-y-8 animate-in fade-in duration-500">
+          
           {proposals.length > 0 && (
             <div className="space-y-4">
-              {proposals.map(proposal => (
+              {proposals.map(proposal => {
+                const proposalType = getProposalType(proposal);
+                const isPosticipo = proposalType === 'posticipo';
+                const isCambio = proposalType === 'cambio';
+                return (
                 <button 
                   key={proposal.id} 
                   onClick={() => setSelectedProposal(proposal)}
@@ -1144,7 +1343,7 @@ export default function CustomerBooking({
                 >
                   <div className="flex items-center justify-between mb-3">
                     <div className="flex items-center gap-2 text-emerald-200 text-xs font-bold uppercase tracking-widest">
-                      <ArrowUpCircle size={16} /> Proposta di anticipo
+                      {isPosticipo ? <ArrowDownCircle size={16} /> : isCambio ? <Clock size={16} /> : <ArrowUpCircle size={16} />} {isPosticipo ? 'Proposta di posticipo' : isCambio ? 'Proposta di cambio orario' : 'Proposta di anticipo'}
                     </div>
                     <div className="text-[10px] bg-white/20 px-2 py-0.5 rounded-full font-bold">
                       Scade tra {Math.max(0, Math.ceil((proposal.targets[proposal.currentIdx].expiresAt.toDate().getTime() - currentTime.getTime()) / 60000))} min
@@ -1152,7 +1351,7 @@ export default function CustomerBooking({
                   </div>
                   <div className="flex items-center gap-4">
                     <div className="flex-1">
-                      <p className="text-sm opacity-90 mb-1">Il barbiere ti propone di anticipare:</p>
+                      <p className="text-sm opacity-90 mb-1">Il barbiere ti propone di {isPosticipo ? 'posticipare' : isCambio ? 'cambiare orario' : 'anticipare'}:</p>
                       <div className="flex items-center gap-3">
                         <span className="text-xl font-bold">{format((proposal.targets[proposal.currentIdx].proposedStartTime || proposal.gapStartTime).toDate(), 'HH:mm')}</span>
                         <span className="text-xs opacity-60">invece di</span>
@@ -1166,11 +1365,11 @@ export default function CustomerBooking({
                     </div>
                   </div>
                 </button>
-              ))}
+                );
+              })}
             </div>
           )}
 
-          {/* Proposal Detail Modal */}
           {selectedProposal && (
             <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100] p-4 animate-in fade-in">
               <div className="bg-white/95 backdrop-blur-xl w-full max-w-md rounded-[32px] overflow-hidden shadow-2xl border border-white/20 animate-in zoom-in-95 max-h-[90vh] flex flex-col">
@@ -1208,6 +1407,27 @@ export default function CustomerBooking({
                       </div>
                     </div>
                   </div>
+
+                  {/* 🔔 Avviso cambio barbiere (proposta cross-staff) */}
+                  {selectedProposal.targets[selectedProposal.currentIdx].proposedStaffId && (() => {
+                    const appId = selectedProposal.targets[selectedProposal.currentIdx].appointmentId;
+                    const origStaffId = myAppointments.find(a => a.id === appId)?.staffId;
+                    const newStaffId = selectedProposal.targets[selectedProposal.currentIdx].proposedStaffId;
+                    if (!origStaffId || origStaffId === newStaffId) return null;
+                    const origName = staffMembers.find(s => s.uid === origStaffId)?.displayName || 'Barbiere';
+                    const newName = staffMembers.find(s => s.uid === newStaffId)?.displayName || 'Barbiere';
+                    return (
+                      <div className="p-4 bg-amber-50 rounded-2xl border border-amber-200 flex items-start gap-3">
+                        <Users size={18} className="text-amber-600 mt-0.5 shrink-0" />
+                        <div>
+                          <div className="text-xs font-bold text-amber-700 uppercase tracking-widest">Cambio barbiere</div>
+                          <p className="text-sm text-amber-800">
+                            Con questo spostamento sarai seguito da <strong>{newName}</strong> al posto di <strong>{origName}</strong>.
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  })()}
 
                   <div className="space-y-3">
                     <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Servizi Prenotati</div>
@@ -1247,7 +1467,6 @@ export default function CustomerBooking({
             </div>
           )}
 
-          {/* Active Appointment Reminder */}
           {activeAppointment && (
             <div className="bg-black/80 backdrop-blur-md text-white rounded-[32px] p-8 shadow-2xl relative overflow-hidden border border-white/10">
               <div className="relative z-10">
@@ -1263,6 +1482,12 @@ export default function CustomerBooking({
                     <div className="text-xl text-gray-300">
                       {format(activeAppointment.startTime.toDate(), 'EEEE d MMMM', { locale: it })}
                     </div>
+                    {/* 🚀 MOSTRA IL NOME DEL BARBIERE SE PRESENTE */}
+                    {activeAppointment.staffId && (
+                      <div className="mt-3 text-sm text-gray-400 flex items-center gap-1.5">
+                        <User size={14} /> Con: <span className="text-white font-bold">{staffMembers.find(s => s.uid === activeAppointment.staffId)?.displayName || 'Barbiere'}</span>
+                      </div>
+                    )}
                   </div>
                   <div className="flex flex-col justify-end items-start md:items-end gap-4">
                     <div className="flex gap-2">
@@ -1294,40 +1519,121 @@ export default function CustomerBooking({
             </div>
           )}
 
-          <div className="grid md:grid-cols-2 gap-8">
-            <section className="space-y-6 bg-white/80 backdrop-blur-md p-4 sm:p-6 rounded-3xl border border-white/20 shadow-xl">
-              <h2 className="text-2xl font-bold flex items-center gap-2">
-                <span className="w-8 h-8 bg-black text-white rounded-full flex items-center justify-center text-sm">1</span>
-                Scegli i servizi
+          {/* 🚀 NUOVO STEP 0: CAROSELLO OPERATORI */}
+          {salonSettings?.hasMultiStaff && staffMembers.length > 0 && (
+            <section className="bg-white/80 backdrop-blur-md p-4 sm:p-6 rounded-3xl border border-white/20 shadow-xl overflow-hidden">
+              <h2 className="text-xl font-bold flex items-center gap-2 mb-4">
+                <Users size={20} className="text-gray-400" />
+                Chi preferisci?
               </h2>
-              <div className="grid gap-4">
-                {(salonSettings?.services || []).map(service => (
+              <div className="flex gap-4 overflow-x-auto pb-4 snap-x snap-mandatory scrollbar-hide -mx-4 px-4 sm:mx-0 sm:px-0">
+                
+                {/* Opzione Default: Qualsiasi */}
+                <button
+                  onClick={() => handleStaffSelection(null)}
+                  className={cn(
+                    "flex-shrink-0 w-32 flex flex-col items-center justify-center gap-3 p-4 rounded-2xl border-2 transition-all snap-start",
+                    selectedStaffId === null 
+                      ? "border-black bg-black text-white shadow-lg scale-105" 
+                      : "border-gray-100 bg-white hover:border-gray-300 hover:bg-gray-50 text-gray-600"
+                  )}
+                >
+                  <div className={cn(
+                    "w-12 h-12 rounded-full flex items-center justify-center shadow-inner",
+                    selectedStaffId === null ? "bg-white/20 text-white" : "bg-gray-100 text-gray-400"
+                  )}>
+                    <Users size={24} />
+                  </div>
+                  <div className="text-center">
+                    <div className="font-bold text-sm leading-tight">Nessuna<br/>preferenza</div>
+                    <div className={cn("text-[9px] mt-1 font-medium", selectedStaffId === null ? "text-gray-300" : "text-gray-400")}>
+                      (Più disponibilità)
+                    </div>
+                  </div>
+                </button>
+
+                {/* Lista Barbieri */}
+                {staffMembers.map(staff => (
                   <button
-                    key={service.id}
-                    onClick={() => toggleService(service)}
-                    className={`w-full p-4 rounded-2xl border text-left transition-all flex justify-between items-center ${
-                      selectedServices.find(s => s.id === service.id)
-                      ? 'border-black bg-black text-white shadow-lg'
-                      : 'border-gray-400 hover:border-black bg-white'
-                    }`}
+                    key={staff.uid}
+                    onClick={() => handleStaffSelection(staff.uid)}
+                    className={cn(
+                      "flex-shrink-0 w-32 flex flex-col items-center justify-start gap-3 p-4 rounded-2xl border-2 transition-all snap-start",
+                      selectedStaffId === staff.uid 
+                        ? "border-black bg-black text-white shadow-lg scale-105" 
+                        : "border-gray-100 bg-white hover:border-gray-300 hover:bg-gray-50 text-gray-600"
+                    )}
                   >
-                    <div>
-                      <div className="font-bold">{service.name}</div>
-                      {service.description && (
-                        <div className={cn("text-xs mt-0.5 mb-1 leading-tight", selectedServices.find(s => s.id === service.id) ? "text-gray-300" : "text-gray-500")}>
-                          {service.description}
+                    <div 
+                      className="w-12 h-12 rounded-full shadow-inner bg-cover bg-center border-2 border-white/20"
+                      style={{ 
+                        backgroundColor: staff.color || '#e5e7eb',
+                        backgroundImage: staff.avatarUrl ? `url(${staff.avatarUrl})` : 'none'
+                      }}
+                    >
+                      {!staff.avatarUrl && (
+                        <div className="w-full h-full flex items-center justify-center text-white font-bold text-lg opacity-80">
+                          {staff.displayName.charAt(0).toUpperCase()}
                         </div>
                       )}
-                      <div className={`text-sm ${selectedServices.find(s => s.id === service.id) ? 'text-gray-400' : 'text-gray-500 font-medium'}`}>
-                        {service.duration} min • €{service.price}
+                    </div>
+                    <div className="text-center w-full">
+                      <div className="font-bold text-sm truncate w-full px-1">{staff.displayName.split(' ')[0]}</div>
+                      {/* Se vuoi mostrare il ruolo in piccolo */}
+                      <div className={cn("text-[9px] mt-1 font-medium truncate w-full", selectedStaffId === staff.uid ? "text-gray-300" : "text-gray-400")}>
+                        {staff.role === 'owner' ? 'Titolare' : 'Barbiere'}
                       </div>
                     </div>
-                    {selectedServices.find(s => s.id === service.id) && <CheckCircle2 size={20} />}
                   </button>
                 ))}
               </div>
+            </section>
+          )}
+
+          <div className="grid md:grid-cols-2 gap-8">
+            <section className="space-y-6 bg-white/80 backdrop-blur-md p-4 sm:p-6 rounded-3xl border border-white/20 shadow-xl">
+              <h2 className="text-2xl font-bold flex items-center gap-2">
+                <span className="w-8 h-8 bg-black text-white rounded-full flex items-center justify-center text-sm">
+                  {salonSettings?.hasMultiStaff && staffMembers.length > 0 ? '2' : '1'}
+                </span>
+                Scegli i servizi
+              </h2>
+              
+              <div className="grid gap-4">
+                {displayedServices.length === 0 ? (
+                  <div className="text-center py-8 text-gray-400 text-sm bg-gray-50 rounded-2xl border border-dashed border-gray-200">
+                    L'operatore selezionato non effettua i servizi attualmente a listino.
+                  </div>
+                ) : (
+                  displayedServices.map(service => (
+                    <button
+                      key={service.id}
+                      onClick={() => toggleService(service)}
+                      className={`w-full p-4 rounded-2xl border text-left transition-all flex justify-between items-center ${
+                        selectedServices.find(s => s.id === service.id)
+                        ? 'border-black bg-black text-white shadow-lg scale-[1.02]'
+                        : 'border-gray-200 hover:border-black bg-white hover:bg-gray-50'
+                      }`}
+                    >
+                      <div>
+                        <div className="font-bold">{service.name}</div>
+                        {service.description && (
+                          <div className={cn("text-xs mt-0.5 mb-1 leading-tight", selectedServices.find(s => s.id === service.id) ? "text-gray-300" : "text-gray-500")}>
+                            {service.description}
+                          </div>
+                        )}
+                        <div className={`text-sm ${selectedServices.find(s => s.id === service.id) ? 'text-gray-400' : 'text-gray-500 font-medium'}`}>
+                          {service.duration} min • €{service.price}
+                        </div>
+                      </div>
+                      {selectedServices.find(s => s.id === service.id) && <CheckCircle2 size={20} />}
+                    </button>
+                  ))
+                )}
+              </div>
+
               {selectedServices.length > 0 && (
-                <div className="p-4 bg-gray-50 rounded-2xl border border-gray-100">
+                <div className="p-4 bg-gray-50 rounded-2xl border border-gray-100 animate-in fade-in">
                   <div className="flex justify-between text-sm mb-1">
                     <span className="text-gray-500">Durata totale:</span>
                     <span className="font-bold">{selectedServices.reduce((acc, s) => acc + s.duration, 0)} min</span>
@@ -1342,7 +1648,9 @@ export default function CustomerBooking({
 
             <section className="space-y-6 bg-white/80 backdrop-blur-md p-4 sm:p-6 rounded-3xl border border-white/20 shadow-xl">
               <h2 className="text-2xl font-bold flex items-center gap-2">
-                <span className="w-8 h-8 bg-black text-white rounded-full flex items-center justify-center text-sm">2</span>
+                <span className="w-8 h-8 bg-black text-white rounded-full flex items-center justify-center text-sm">
+                  {salonSettings?.hasMultiStaff && staffMembers.length > 0 ? '3' : '2'}
+                </span>
                 Scegli data e ora
               </h2>
               
@@ -1376,22 +1684,22 @@ export default function CustomerBooking({
                 ) : loading ? (
                   <div className="flex items-center gap-2 text-gray-400">
                     <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-black"></div>
-                    Calcolo orari...
+                    Calcolo orari incrociati...
                   </div>
                 ) : availableSlots.length === 0 ? (
                   <div className="bg-red-50 text-red-600 p-4 rounded-xl text-sm flex items-center gap-2">
                     <AlertCircle size={16} /> Nessun orario disponibile per questa data.
                   </div>
                 ) : (
-                  <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+                  <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 animate-in fade-in">
                     {availableSlots.map(slot => (
                       <button
                         key={slot.toISOString()}
                         onClick={() => setSelectedSlot(slot)}
                         className={`py-3 rounded-xl border text-sm font-bold transition-all ${
                           selectedSlot && slot.getTime() === selectedSlot.getTime()
-                          ? 'border-black bg-black text-white shadow-md'
-                          : 'border-gray-400 hover:border-black bg-white'
+                          ? 'border-black bg-black text-white shadow-md scale-105'
+                          : 'border-gray-200 hover:border-black bg-white hover:bg-gray-50'
                         }`}
                       >
                         {format(slot, 'HH:mm')}
@@ -1402,14 +1710,24 @@ export default function CustomerBooking({
               </div>
 
               {selectedSlot && (
-                <div className="space-y-6 pt-4 border-t border-gray-100">
+                <div className="space-y-6 pt-4 border-t border-gray-100 animate-in slide-in-from-bottom-4">
+                  {/* Riepilogo scelta barbiere */}
+                  {salonSettings?.hasMultiStaff && staffMembers.length > 0 && (
+                    <div className="p-4 bg-emerald-50 text-emerald-800 rounded-2xl border border-emerald-100 flex items-center gap-3">
+                      <CheckCircle2 size={20} className="text-emerald-500 shrink-0" />
+                      <div className="text-sm font-medium">
+                        Stai prenotando con <span className="font-bold">{staffMembers.find(s => s.uid === selectedStaffId)?.displayName || 'Qualsiasi operatore libero'}</span>
+                      </div>
+                    </div>
+                  )}
+
                   <div className="flex items-center gap-3 p-4 bg-gray-50 rounded-2xl border border-gray-100">
                     <input
                       type="checkbox"
                       id="forFriend"
                       checked={isForFriend}
                       onChange={(e) => setIsForFriend(e.target.checked)}
-                      className="w-5 h-5 rounded border-gray-300 text-black focus:ring-black"
+                      className="w-5 h-5 rounded border-gray-300 text-black focus:ring-black cursor-pointer"
                     />
                     <label htmlFor="forFriend" className="text-sm font-bold cursor-pointer">
                       Prenota per un amico
@@ -1470,7 +1788,7 @@ export default function CustomerBooking({
                           <select
                             value={phonePrefix}
                             onChange={(e) => setPhonePrefix(e.target.value)}
-                            className="w-full pl-9 pr-2 py-3 rounded-xl border border-gray-200 focus:border-black focus:ring-0 outline-none appearance-none bg-white text-sm"
+                            className="w-full pl-9 pr-2 py-3 rounded-xl border border-gray-200 focus:border-black focus:ring-0 outline-none appearance-none bg-white text-sm cursor-pointer"
                           >
                             {COUNTRY_CODES.map(c => (
                               <option key={c.code} value={c.dial_code}>{c.flag} {c.dial_code}</option>
@@ -1494,17 +1812,16 @@ export default function CustomerBooking({
                   <button
                     onClick={() => handleBooking()}
                     disabled={loading || (!isForFriend && phoneNumber.length < 10) || (isForFriend && friendPhone.length < 10)}
-                    className="w-full py-4 bg-black text-white rounded-2xl font-bold hover:bg-gray-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                    className="w-full py-4 bg-black text-white rounded-2xl font-bold hover:bg-gray-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-xl hover:shadow-2xl hover:-translate-y-0.5 active:translate-y-0"
                   >
-                    {loading ? 'Prenotazione in corso...' : 'Conferma Prenotazione'}
-                    <ChevronRight size={20} />
+                    {loading ? 'Elaborazione in corso...' : 'Conferma Prenotazione'}
+                    {!loading && <ChevronRight size={20} />}
                   </button>
                 </div>
               )}
             </section>
           </div>
 
-          {/* Phone Update Popup */}
           {showPhoneUpdatePopup && (
             <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[120] p-4 animate-in fade-in">
               <div className="bg-white/95 backdrop-blur-xl w-full max-w-md rounded-[32px] p-8 shadow-2xl border border-white/20 animate-in zoom-in-95 text-center">
@@ -1530,7 +1847,7 @@ export default function CustomerBooking({
                   </button>
                   <button
                     onClick={() => setShowPhoneUpdatePopup(false)}
-                    className="w-full py-2 text-xs text-gray-400 hover:underline"
+                    className="w-full py-2 text-xs text-gray-400 hover:text-gray-600 transition-colors mt-2"
                   >
                     Annulla
                   </button>
@@ -1728,7 +2045,6 @@ export default function CustomerBooking({
         </div>
       )}
 
-      {/* Calendar Modal */}
       {showCalendar && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[150] p-4 animate-in fade-in">
           <div className="bg-white w-full max-w-sm rounded-[32px] p-6 shadow-2xl border border-white/20 animate-in zoom-in-95">
@@ -1774,7 +2090,6 @@ export default function CustomerBooking({
         </div>
       )}
 
-      {/* Cancellation Confirmation Modal */}
       {showCancelConfirm && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[110] p-4 animate-in fade-in">
           <div className="bg-white/95 backdrop-blur-xl w-full max-w-md rounded-[32px] p-8 shadow-2xl border border-white/20 text-center animate-in zoom-in-95">

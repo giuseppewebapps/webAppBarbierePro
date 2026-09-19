@@ -1,10 +1,13 @@
+import { ProposalType } from '../types';
+
 export const generateWhatsAppLink = (
   type: string,
   customerName: string,
   customerPhone: string,
   date: string,
   time: string,
-  tenantId: string = ''
+  tenantId: string = '',
+  direction?: ProposalType
 ): string | null => {
   if (!customerPhone) return null;
 
@@ -34,7 +37,13 @@ export const generateWhatsAppLink = (
       message = `Ciao ${customerName}, ti scrivo in merito al tuo appuntamento del ${date}. Ci sarebbe da fare una piccola modifica, sentiamoci appena puoi!`;
       break;
     case 'reschedule_proposal_sent':
-      message = `Ciao ${customerName}! Si è liberato un posto alle ${time}. Ti ho inviato una proposta di cambio orario direttamente sulla tua app ${salonName}. Controlla e fammi sapere se riesci ad anticipare! 💈`;
+      if (direction === 'posticipo') {
+        message = `Ciao ${customerName}! Si è liberato un posto alle ${time}. Ti ho inviato una proposta di cambio orario direttamente sulla tua app ${salonName}. Controlla e fammi sapere se riesci a posticipare! 💈`;
+      } else if (direction === 'cambio') {
+        message = `Ciao ${customerName}! Si è liberato un posto alle ${time}. Ti ho inviato una proposta di cambio orario direttamente sulla tua app ${salonName}. Controlla e fammi sapere se ti va bene! 💈`;
+      } else {
+        message = `Ciao ${customerName}! Si è liberato un posto alle ${time}. Ti ho inviato una proposta di cambio orario direttamente sulla tua app ${salonName}. Controlla e fammi sapere se riesci ad anticipare! 💈`;
+      }
       break;
     default:
       return null;

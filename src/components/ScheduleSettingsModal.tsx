@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { doc, getDoc, setDoc, Timestamp, collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
-import { WeeklySchedule, TimeRange, SpecialDay } from '../types';
-import { XCircle, Check, Calendar, ArrowLeft, Plus, Trash2 } from 'lucide-react';
+import { WeeklySchedule, SpecialDay } from '../types';
+import { XCircle, Check, ArrowLeft, Plus, Trash2 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { format, getDay } from 'date-fns';
 import { it } from 'date-fns/locale';
@@ -32,6 +32,54 @@ const generateEmptySchedule = (): WeeklySchedule => {
   return empty;
 };
 
+// 🚀 Confronto deterministico: rileva se il documento è stato modificato da un altro dispositivo
+const serializeSchedule = (s: WeeklySchedule | null | undefined): string => {
+  const parts: string[] = [];
+  for (let d = 0; d <= 6; d++) {
+    const day = s?.[d];
+    parts.push(`${d}:${day?.isOpen ? 1 : 0}:${(day?.shifts || []).map(x => `${x.start}-${x.end}`).join('|')}`);
+  }
+  return parts.join(',');
+};
+
+// Converte 8.5 -> "08:30"
+const decimalToHHmm = (value: number) => {
+  const h = Math.floor(value);
+  const m = Math.round((value - h) * 60);
+  return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+};
+
+// 🚀 Riepilogo leggibile degli orari (ordine Lunedì -> Domenica) per il dialogo di conferma
+const summarizeSchedule = (s: WeeklySchedule): string => {
+  return DAYS_OF_WEEK.map(({ id, label }) => {
+    const day = s?.[id];
+    const hours = day?.isOpen && (day.shifts || []).length > 0
+      ? day.shifts.map(sh => `${decimalToHHmm(sh.start)}–${decimalToHHmm(sh.end)}`).join(', ')
+      : 'CHIUSO';
+    return `${label}: ${hours}`;
+  }).join('\n');
+};
+
+// 🚀 Validazione: blocca orari incoerenti PRIMA di scrivere sul database
+const findScheduleIssues = (s: WeeklySchedule): string[] => {
+  const issues: string[] = [];
+  for (const { id, label } of DAYS_OF_WEEK) {
+    const day = s?.[id];
+    if (!day?.isOpen) continue;
+    const shifts = day.shifts || [];
+    if (shifts.length === 0) {
+      issues.push(`${label}: segnato come APERTO ma senza fasce orarie.`);
+      continue;
+    }
+    shifts.forEach((sh, idx) => {
+      if (!(sh.end > sh.start)) {
+        issues.push(`${label}, turno ${idx + 1}: orario non valido (${decimalToHHmm(sh.start)} – ${decimalToHHmm(sh.end)}).`);
+      }
+    });
+  }
+  return issues;
+};
+
 export default function ScheduleSettingsModal({ onClose }: ScheduleSettingsModalProps) {
   // 🚀 Estrazione tenantId
   const { tenantId } = useAuth();
@@ -53,17 +101,21 @@ export default function ScheduleSettingsModal({ onClose }: ScheduleSettingsModal
     return options;
   }, []);
 
+  // 🚀 Lettura del documento (riusata all'apertura e quando si annulla un salvataggio "stale")
+  const loadSchedule = async (): Promise<WeeklySchedule | null> => {
+    if (!tenantId) return null;
+    const docSnap = await getDoc(doc(db, 'salons', tenantId, 'settings', 'public'));
+    const data = docSnap.exists() ? docSnap.data() : null;
+    const loaded = data?.weeklySchedule ? (data.weeklySchedule as WeeklySchedule) : null;
+    if (loaded) setSchedule(loaded);
+    return loaded;
+  };
+
   useEffect(() => {
     const fetchSettings = async () => {
       if (!tenantId) return; 
       try {
-        const docSnap = await getDoc(doc(db, 'salons', tenantId, 'settings', 'public'));
-        if (docSnap.exists()) {
-          const data = docSnap.data();
-          if (data.weeklySchedule) {
-            setSchedule(data.weeklySchedule);
-          }
-        }
+        await loadSchedule();
       } catch (err) {
         console.error("Errore caricamento impostazioni orario:", err);
       } finally {
@@ -127,6 +179,48 @@ export default function ScheduleSettingsModal({ onClose }: ScheduleSettingsModal
         return;
       }
 
+      // 🚀 VALIDAZIONE: niente giornate aperte senza fasce o con orari incoerenti
+      const issues = findScheduleIssues(schedule);
+      if (issues.length > 0) {
+        alert(`IMPOSSIBILE SALVARE:\n\n${issues.join('\n')}\n\nOgni giorno aperto deve avere almeno una fascia con inizio precedente alla fine.`);
+        setSaving(false);
+        return;
+      }
+
+      // 🚀 ANTI-SOVRASCRITTURA: rileggo il documento appena prima di scrivere, così non
+      // cancello modifiche fatte nel frattempo da un altro dispositivo/sessione.
+      let stale = false;
+      try {
+        const freshSnap = await getDoc(doc(db, 'salons', tenantId, 'settings', 'public'));
+        const fresh = freshSnap.exists() ? (freshSnap.data().weeklySchedule as WeeklySchedule | undefined) : undefined;
+        stale = serializeSchedule(fresh) !== serializeSchedule(schedule);
+      } catch (err) {
+        console.warn("Impossibile verificare gli orari aggiornati:", err);
+      }
+
+      // 🚀 CONFERMA RIEPILOGATIVA: nessun salvataggio involontario
+      const confirmed = window.confirm(
+        (stale
+          ? "⚠️ ATTENZIONE: gli orari standard sono cambiati su un altro dispositivo dopo l'apertura di questa schermata.\nPremendo OK sovrascriverai quelle modifiche con i valori mostrati qui.\nPremendo Annulla ricarico gli orari aggiornati e NON salvo.\n\n"
+          : "") +
+        `Stai per salvare gli ORARI STANDARD del salone:\n\n${summarizeSchedule(schedule)}\n\n` +
+        `Valgono per TUTTE le settimane (le eccezioni sui singoli giorni restano invariate).\n\n` +
+        `Confermi il salvataggio?`
+      );
+
+      if (!confirmed) {
+        if (stale) {
+          try {
+            await loadSchedule();
+            alert("Ho ricaricato gli orari aggiornati: nessuna modifica è stata salvata.");
+          } catch (err) {
+            console.error("Errore ricaricamento orari:", err);
+          }
+        }
+        setSaving(false);
+        return;
+      }
+
       // 🚀 Salviamo i dati dinamicamente nel documento "public"
       await setDoc(doc(db, 'salons', tenantId, 'settings', 'public'), {
         weeklySchedule: schedule,
@@ -144,19 +238,12 @@ export default function ScheduleSettingsModal({ onClose }: ScheduleSettingsModal
   };
 
   const toggleDayOpen = (dayId: number) => {
-    setSchedule(prev => {
-      const isCurrentlyOpen = prev[dayId].isOpen;
-      return {
-        ...prev,
-        [dayId]: {
-          ...prev[dayId],
-          isOpen: !isCurrentlyOpen,
-          shifts: !isCurrentlyOpen && prev[dayId].shifts.length === 0 
-            ? [{ start: 8, end: 13 }, { start: 15, end: 20 }] 
-            : prev[dayId].shifts
-        }
-      };
-    });
+    // 🚀 Nessun turno inserito automaticamente: abilitare un giorno con 0 fasce NON crea
+    // orari che l'owner non si aspetta (i calendari lo trattano come chiuso finché non aggiunge fasce).
+    setSchedule(prev => ({
+      ...prev,
+      [dayId]: { ...prev[dayId], isOpen: !prev[dayId].isOpen }
+    }));
   };
 
   const updateShift = (dayId: number, shiftIndex: number, field: 'start' | 'end', val: number) => {
@@ -175,7 +262,9 @@ export default function ScheduleSettingsModal({ onClose }: ScheduleSettingsModal
       ...prev,
       [dayId]: {
         ...prev[dayId],
-        shifts: [...prev[dayId].shifts, { start: 14, end: 20 }] 
+        // 🚀 Placeholder volutamente NON valido (00:00) invece di un orario inventato:
+        // il salvataggio lo blocca finché non scegli esplicitamente inizio e fine.
+        shifts: [...prev[dayId].shifts, { start: 0, end: 0 }]
       }
     }));
   };
