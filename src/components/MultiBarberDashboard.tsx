@@ -683,9 +683,13 @@ export default function MultiBarberDashboard({ selectedAppointmentId, selectedNo
                         }
                       }
 
+                      // 🔧 offRange (APERTURA/CHIUSURA ORE) ora ordinato cronologicamente
+                      // (prima era sempre in testa alla riga, fuorviante con appuntamenti
+                      // che terminavano DOPO la chiusura)
                       const combinedItems = [
                         ...overlappingApps.map(a => ({ type: 'app' as const, data: a, start: isBefore(a.startTime.toDate(), itemStart) ? itemStart : a.startTime.toDate() })),
-                        ...gapsForThisItem.map(g => ({ type: 'gap' as const, data: g, start: g.start }))
+                        ...gapsForThisItem.map(g => ({ type: 'gap' as const, data: g, start: g.start })),
+                        ...(offRange ? [{ type: 'offrange' as const, data: offRange, start: offRange.start }] : [])
                       ].sort((a, b) => a.start.getTime() - b.start.getTime());
 
                       return (
@@ -697,13 +701,14 @@ export default function MultiBarberDashboard({ selectedAppointmentId, selectedNo
                             <div className="w-full text-center text-gray-300 text-[10px] font-bold uppercase tracking-widest italic">PAUSA SALONE</div>
                           ) : (
                             <>
-                              {offRange && (
-                                <div className="px-4 min-h-[76px] sm:h-[88px] bg-gray-100/80 border-2 border-dashed border-gray-300 text-gray-400 rounded-2xl flex items-center justify-center text-[10px] font-bold uppercase tracking-wider shrink-0">
-                                  {offRange.label}
-                                </div>
-                              )}
-                              
                               {combinedItems.map((itemObj, idx) => {
+                                if (itemObj.type === 'offrange') {
+                                  return (
+                                    <div key="offrange" className="px-4 min-h-[76px] sm:h-[88px] bg-gray-100/80 border-2 border-dashed border-gray-300 text-gray-400 rounded-2xl flex items-center justify-center text-[10px] font-bold uppercase tracking-wider shrink-0">
+                                      {itemObj.data.label}
+                                    </div>
+                                  );
+                                }
                                 if (itemObj.type === 'gap') {
                                   const gapDur = itemObj.data.duration;
                                   return (
@@ -761,7 +766,7 @@ export default function MultiBarberDashboard({ selectedAppointmentId, selectedNo
                                       key={`${app.id}-${isBeforeCard ? 'start' : 'spill'}`} 
                                       onClick={openAppointment}
                                       title={getDisplayName(app)}
-                                      style={{ flexGrow: dur / 30, flexShrink: 0, flexBasis: 0, minWidth: 104 }} 
+                                      style={{ flexGrow: dur / 30, flexShrink: 0, flexBasis: 0, minWidth: 72 }} 
                                       className={cn(
                                         "min-h-[76px] sm:h-[88px] bg-gray-100 border-2 border-dashed border-gray-300 rounded-xl flex items-center justify-center opacity-70 cursor-pointer hover:opacity-100 hover:bg-gray-200/70 transition-all",
                                         selectionMode && !isCandidate ? "opacity-30 grayscale" : "",
