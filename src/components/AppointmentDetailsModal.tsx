@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { doc, updateDoc, setDoc, Timestamp, addDoc, collection } from 'firebase/firestore';
+import { doc, updateDoc, setDoc, deleteDoc, writeBatch, Timestamp, addDoc, collection } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Appointment, UserProfile, StaffProfile, SalonPublicSettings } from '../types';
 import { format, isBefore, isAfter } from 'date-fns';
@@ -64,6 +64,9 @@ export default function AppointmentDetailsModal({
       const rawPhone = editCustomerForm.phone.replace(/\D/g, '');
       const purePhone = (rawPhone.startsWith('39') && rawPhone.length > 10) ? rawPhone.substring(2) : rawPhone.slice(-10);
       const fullPhone = purePhone.length >= 9 ? `+39${purePhone}` : '';
+      // Telefono ATTUALE dell'appuntamento (prima della correzione), normalizzato
+      const rawOldPhone = (appointment.isForFriend ? appointment.friendDetails?.phone : appointment.customer?.phoneNumber)?.replace(/\D/g, '') || '';
+      const oldPurePhone = rawOldPhone ? (rawOldPhone.startsWith('39') && rawOldPhone.length > 10 ? rawOldPhone.substring(2) : rawOldPhone.slice(-10)) : '';
       const appRef = doc(db, 'salons', tenantId, 'appointments', appointment.id!);
       
       // 🛡️ Blindatura: mai undefined in Firestore (raggio 'Unsupported field value')
@@ -87,6 +90,53 @@ export default function AppointmentDetailsModal({
           phone: purePhone, phonePrefix: '+39', email: safeEmail, updatedAt: Timestamp.now()
         }, { merge: true });
       }
+
+      // 🔄 Telefono cambiato → propaga ai futuri appuntamenti dello STESSO cliente:
+      // le notifiche WhatsApp/Email di quegli appuntamenti usano il numero
+      // memorizzato sull'appuntamento, altrimenti partirebbero col numero vecchio.
+      // (La rubrica è chiavata per numero, quindi ogni telefono resta un doc: il
+      // vecchio viene rimosso qui sotto se ormai orfano.)
+      const normalizePhone = (p?: string) => {
+        const d = (p || '').replace(/\D/g, '');
+        return d ? (d.startsWith('39') && d.length > 10 ? d.substring(2) : d.slice(-10)) : '';
+      };
+
+      if (!appointment.isForFriend && oldPurePhone && purePhone !== oldPurePhone) {
+        const nowMs = currentTime.getTime();
+
+        const futureBooked = allAppointments.filter(a =>
+          a.id !== appointment.id &&
+          a.customerId && a.customerId !== 'manual_entry' &&
+          a.status === 'booked' &&
+          a.startTime.toMillis() >= nowMs &&
+          normalizePhone(a.customer?.phoneNumber) === oldPurePhone
+        );
+
+        if (futureBooked.length > 0) {
+          const batch = writeBatch(db);
+          futureBooked.forEach(a => batch.update(doc(db, 'salons', tenantId, 'appointments', a.id!), {
+            'customer.phoneNumber': fullPhone,
+            updatedAt: Timestamp.now()
+          }));
+          await batch.commit();
+        }
+
+        // 🧹 Vecchio contatto orfano: cancellalo SOLO se nessun appuntamento
+        // attivo (booked e futuro) lo usa ancora (es. altri clienti che condividono
+        // lo stesso numero, o appuntamenti futuri non toccati dal batch).
+        const futureBookedIds = new Set(futureBooked.map(a => a.id!));
+        const stillUsed = allAppointments.some(a =>
+          a.id !== appointment.id &&
+          !futureBookedIds.has(a.id!) &&
+          a.status === 'booked' &&
+          a.startTime.toMillis() >= nowMs &&
+          normalizePhone(a.customer?.phoneNumber) === oldPurePhone
+        );
+        if (!stillUsed) {
+          await deleteDoc(doc(db, 'salons', tenantId, 'contacts', oldPurePhone));
+        }
+      }
+
       setIsEditingCustomer(false);
     } catch (error: any) {
       // 🔧 Log reale: prima l'alert generico nascondeva error.code (es. permission-denied)
