@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { doc, updateDoc, Timestamp, addDoc, collection } from 'firebase/firestore';
+import { doc, updateDoc, setDoc, Timestamp, addDoc, collection } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Appointment, UserProfile, StaffProfile, SalonPublicSettings } from '../types';
 import { format, isBefore, isAfter } from 'date-fns';
@@ -66,22 +66,32 @@ export default function AppointmentDetailsModal({
       const fullPhone = purePhone.length >= 9 ? `+39${purePhone}` : '';
       const appRef = doc(db, 'salons', tenantId, 'appointments', appointment.id!);
       
+      // 🛡️ Blindatura: mai undefined in Firestore (raggio 'Unsupported field value')
+      const safeEmail = editCustomerForm.email || '';
+      const safeFirstName = editCustomerForm.firstName || '';
+      const safeLastName = editCustomerForm.lastName || '';
+
       if (appointment.isForFriend) {
-        await updateDoc(appRef, { 'friendDetails.firstName': editCustomerForm.firstName, 'friendDetails.lastName': editCustomerForm.lastName, 'friendDetails.phone': fullPhone, 'friendDetails.email': editCustomerForm.email });
+        await updateDoc(appRef, { 'friendDetails.firstName': safeFirstName, 'friendDetails.lastName': safeLastName, 'friendDetails.phone': fullPhone, 'friendDetails.email': safeEmail });
       } else {
-        await updateDoc(appRef, { 'customer.displayName': fullName, 'customer.phoneNumber': fullPhone, 'customer.email': editCustomerForm.email });
+        await updateDoc(appRef, { 'customer.displayName': fullName, 'customer.phoneNumber': fullPhone, 'customer.email': safeEmail });
       }
 
+      // 🛡️ Rubrica con setDoc + merge: crea il contatto se non esiste.
+      // updateDoc falliva con 'No document to update' sui clienti registrati
+      // (non-manual) senza documento in /contacts.
       if (purePhone) {
-        await updateDoc(doc(db, 'salons', tenantId, 'contacts', purePhone), {
-          firstName: editCustomerForm.firstName, lastName: editCustomerForm.lastName,
-          firstNameLower: editCustomerForm.firstName.toLowerCase(), lastNameLower: editCustomerForm.lastName.toLowerCase(),
-          phone: purePhone, phonePrefix: '+39', email: editCustomerForm.email, updatedAt: Timestamp.now()
-        });
+        await setDoc(doc(db, 'salons', tenantId, 'contacts', purePhone), {
+          firstName: safeFirstName, lastName: safeLastName,
+          firstNameLower: safeFirstName.toLowerCase(), lastNameLower: safeLastName.toLowerCase(),
+          phone: purePhone, phonePrefix: '+39', email: safeEmail, updatedAt: Timestamp.now()
+        }, { merge: true });
       }
       setIsEditingCustomer(false);
-    } catch (error) {
-      alert("Errore durante l'aggiornamento.");
+    } catch (error: any) {
+      // 🔧 Log reale: prima l'alert generico nascondeva error.code (es. permission-denied)
+      console.error('Errore salvataggio cliente:', error?.code, error?.message);
+      alert(`Errore durante l'aggiornamento: ${error?.code || error?.message || 'sconosciuto'}`);
     } finally {
       setSavingCustomer(false);
     }
