@@ -140,6 +140,13 @@ export function calculateOptimalSlots(
     });
   }
 
+  // 🚀 FALLBACK BUCI ESATTI (micro-servizi < 30 min): traccia se esiste almeno
+  // uno slot d'estremo turno libero; in caso contrario, i buchi che riempiono
+  // ESATTAMENTE la durata del servizio (residuo 0 ai due lati) diventano
+  // prenotabili — non sfasano le fasce orarie.
+  const exactHoleWindows: typeof freeWindows = [];
+  let foundExtremeSlot = false;
+
   // 3. Analisi e Iterazione
   for (const window of freeWindows) {
     if (window.length < D_min_req) continue;
@@ -195,7 +202,15 @@ export function calculateOptimalSlots(
         if (D_req < 30) {
           const isAtShiftStart = slotStart.getTime() === shift.start.getTime();
           const isAtShiftEnd = slotEnd.getTime() === shift.end.getTime();
-          if (!isAtShiftStart && !isAtShiftEnd) continue;
+          if (isAtShiftStart || isAtShiftEnd) {
+            foundExtremeSlot = true;
+          } else {
+            // Candidato "buco esatto": finestra lunga ESATTAMENTE D_req, dalla sua prima posizione
+            if (window.length === D_req && slotStart.getTime() === window.start.getTime()) {
+              exactHoleWindows.push(window);
+            }
+            continue;
+          }
         } else {
           let shieldActivated = false;
           
@@ -244,6 +259,14 @@ export function calculateOptimalSlots(
       //   (es. servizio da 20 min → proposte ogni 20 minuti, a partire dall'inizio di ogni finestra libera)
       const scanStep = requestedService.flexibility > 0 ? 15 : Math.max(D_req, 1);
       slotStart = addMinutes(slotStart, scanStep);
+    }
+  }
+
+  // 🚀 FALLBACK: nessuno slot d'estremo turno libero → i buchi esatti diventano prenotabili
+  if (D_req < 30 && !isManualBooking && !allowEverySlot && !foundExtremeSlot) {
+    for (const window of exactHoleWindows) {
+      if (window.prevCompressed || window.nextCompressed) continue;
+      validSlots.push(new Date(window.start));
     }
   }
 
