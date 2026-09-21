@@ -1,62 +1,87 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    
-    // Funzioni Globali
+
+    // ==========================================
+    // FUNZIONI GLOBALI
+    // ==========================================
     function isAuthenticated() { return request.auth != null; }
     function isOwner(userId) { return isAuthenticated() && request.auth.uid == userId; }
 
     function isValidUser(data) {
-      return data.keys().hasAll(['uid', 'email', 'role']) && data.uid is string &&
-             data.email is string;
+      return data.keys().hasAll(['uid', 'email', 'role']) && data.uid is string && data.email is string;
     }
 
     function isValidAppointment(data) {
-      return data.keys().hasAll(['customerId', 'services', 'startTime', 'endTime', 'status', 'totalAmount', 'createdAt']) &&
-             data.customerId is string && data.status in ['booked', 'cancelled', 'completed'];
+      return data.keys().hasAll(['customerId', 'services', 'startTime', 'endTime', 'status', 'totalAmount', 'createdAt'])
+             && data.customerId is string
+             && data.status in ['booked', 'cancelled', 'completed']
+             && data.services is list
+             && data.totalAmount is number;
     }
 
     function isValidNotification(data) {
-      return data.userId is string && data.type in ['cancellation', 'booking', 'reschedule_proposal', 'manual_management_required', 'proposal_declined'];
+      return data.userId is string
+             && data.title is string
+             && data.message is string
+             && data.type in ['cancellation', 'booking', 'reschedule_proposal', 'manual_management_required', 'proposal_declined'];
     }
 
     // ==========================================
-    // SPAZIO GLOBALE (Identità e Log)
+    // SPAZIO GLOBALE (Identita e Log)
     // ==========================================
-    
     match /users/{userId} {
-      allow read: if isAuthenticated();
-      allow create: if isOwner(userId) && isValidUser(request.resource.data);
-      allow update: if isOwner(userId) && isValidUser(request.resource.data);
+      // get consentito: dashboard e auto-link risolvono i nomi partendo dall'uid.
+      // LIST VIETATA: impedisce di scaricare l'intera anagrafica (email/telefoni).
+      allow get: if isAuthenticated();
+      allow list: if false;
+      allow create: if isOwner(userId) && isValidUser(request.resource.data) && request.resource.data.uid == userId;
+      allow update: if isOwner(userId)
+                    && isValidUser(request.resource.data)
+                    && request.resource.data.uid == userId
+                    && (!('role' in resource.data) || request.resource.data.role == resource.data.role);
       allow delete: if false; // Solo via Firebase Admin Console
     }
 
     match /system_logs/{logId} {
-      allow create: if isAuthenticated();
-      allow read, update, delete: if false; // Solo via Firebase Admin Console per sicurezza
+      allow create: if isAuthenticated()
+                    && request.resource.data.keys().hasAll(['type', 'errorMessage'])
+                    && request.resource.data.type is string
+                    && request.resource.data.errorMessage is string;
+      allow read, update, delete: if false; // Solo via Firebase Admin Console
     }
 
     // ==========================================
     // CONFIG GLOBALE (Kill switch versioni)
     // ==========================================
     match /config/{docId} {
-      allow read: if true; // Il client deve poterla leggere ad app aperta, anche prima del login
-      allow write: if false; // Scrivibile SOLO da Firebase Console (nessuno può manomettere il kill switch)
+      allow read: if true; // Serve anche prima del login
+      allow write: if false; // Solo da Firebase Console
     }
 
     // ==========================================
-    // SPAZIO MULTI-TENANT (Dati isolati per Salone)
+    // SPAZIO MULTI-TENANT
     // ==========================================
-    
     match /salons/{tenantId} {
-      
-      // 🚀 NUOVO RBAC: Controlla se l'utente è nello staff del salone corrente
+
+      // RBAC: l'utente e nello staff del salone corrente?
       function isSalonStaff() {
         return isAuthenticated() && exists(/databases/$(database)/documents/salons/$(tenantId)/staff/$(request.auth.uid));
       }
 
+      // L'uid indicato appartiene allo staff DI QUESTO salone?
+      function isTenantStaff(userId) {
+        return userId is string && userId != '' &&
+               exists(/databases/$(database)/documents/salons/$(tenantId)/staff/$(userId));
+      }
+
+      // staffId ammesso solo se assente, nullo o appartenente a questo salone
+      function validStaffId(data) {
+        return !('staffId' in data) || data.staffId == null || isTenantStaff(data.staffId);
+      }
+
       match /settings/{settingId} {
-        allow read: if true; // I clienti devono leggere gli orari per prenotare
+        allow read: if true; // I clienti leggono gli orari per prenotare
         allow write: if isSalonStaff();
       }
 
@@ -65,47 +90,83 @@ service cloud.firestore {
       }
 
       match /appointments/{appointmentId} {
-        allow read: if isAuthenticated(); 
-        allow create: if isAuthenticated() && isValidAppointment(request.resource.data);
-       allow update: if isAuthenticated() && (
-        isSalonStaff() ||
-        (resource.data.customerId == request.auth.uid && 
-          request.resource.data.customerId == request.auth.uid &&
-          // Autorizza modifiche SOLO a stato e orari. Soldi e servizi restano intoccabili.
-          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'startTime', 'endTime', 'updatedAt'])
-           ) ||
-        //Gestione caso di autolinker 
-        (resource.data.customerId == request.auth.uid && resource.data.status == 'booked' && isValidAppointment(request.resource.data)) ||
-        (resource.data.customerId != request.auth.uid &&
-          request.resource.data.customerId == request.auth.uid &&
-          (
-            (resource.data.customer.email != null && resource.data.customer.email == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.email) ||
-            (resource.data.customer.phoneNumber != null && resource.data.customer.phoneNumber == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.phoneNumber)
-          ) &&
-          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['customerId', 'customer', 'isManual'])
-        )
-      );
-        allow delete: if isSalonStaff() || (isAuthenticated() && resource.data.status == 'cancelled') || (isAuthenticated() && resource.data.customerId == request.auth.uid);
+        // NOTA (Fase 1b): la lettura resta consentita agli autenticati perche il client
+        // calcola gli slot liberi leggendo gli appuntamenti del salone e l'auto-link cerca
+        // per telefono. Verra chiusa con la collezione sanificata busyBlocks.
+        allow read: if isAuthenticated();
+
+        allow create: if isAuthenticated()
+                      && isValidAppointment(request.resource.data)
+                      && validStaffId(request.resource.data)
+                      && (
+                        isSalonStaff() ||
+                        (request.resource.data.customerId == request.auth.uid
+                         && request.resource.data.status == 'booked')
+                      );
+
+        allow update: if isAuthenticated() && (
+          isSalonStaff() ||
+          // Il cliente puo cancellare o spostare SOLO il proprio appuntamento:
+          // servizi e importi restano intoccabili.
+          (resource.data.customerId == request.auth.uid
+           && request.resource.data.customerId == request.auth.uid
+           && validStaffId(request.resource.data)
+           && request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['status', 'startTime', 'endTime', 'updatedAt', 'cancelledAt', 'cancelledBy', 'staffId'])) ||
+          // Auto-link: aggancio di un appuntamento manuale per email o telefono.
+          // I campi sono verificati uno per uno per evitare evaluation error su documenti
+          // legacy privi di customer/email/phoneNumber (un errore qui negherebbe l aggancio).
+          (resource.data.customerId != request.auth.uid
+           && request.resource.data.customerId == request.auth.uid
+           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['customerId', 'customer', 'isManual'])
+           && resource.data.keys().hasAll(['customer'])
+           && (
+             (resource.data.customer.keys().hasAll(['email'])
+              && resource.data.customer.email != null
+              && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.keys().hasAll(['email'])
+              && resource.data.customer.email == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.email) ||
+             (resource.data.customer.keys().hasAll(['phoneNumber'])
+              && resource.data.customer.phoneNumber != null
+              && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.keys().hasAll(['phoneNumber'])
+              && resource.data.customer.phoneNumber == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.phoneNumber)
+           ))
+        );
+
+        allow delete: if isAuthenticated() && (
+          isSalonStaff() ||
+          (resource.data.customerId == request.auth.uid && resource.data.status == 'cancelled')
+        );
       }
 
       match /notifications/{notificationId} {
         allow read, update, delete: if isAuthenticated() && (resource.data.userId == request.auth.uid || isSalonStaff());
-        allow create: if isAuthenticated() && isValidNotification(request.resource.data);
+        // Il cliente puo notificare SOLO lo staff di questo salone; lo staff chiunque.
+        allow create: if isAuthenticated()
+                      && isValidNotification(request.resource.data)
+                      && (
+                        isSalonStaff() ||
+                        request.resource.data.userId == request.auth.uid ||
+                        isTenantStaff(request.resource.data.userId)
+                      );
       }
 
+      // NOTA (Fase 1b): read/update restano aperti agli autenticati perche il cliente
+      // deve accettare o rifiutare la proposta. Verranno ristretti con un campo
+      // denormalizzato participantIds e filtro array-contains lato client.
       match /rescheduleProposals/{proposalId} {
-        allow read, write: if isAuthenticated();
+        allow read: if isAuthenticated();
+        allow update: if isAuthenticated();
+        allow create, delete: if isSalonStaff();
       }
 
       match /calendar_exceptions/{exceptionDate} {
         allow read: if true;
         allow write: if isSalonStaff();
       }
-      
-      // La lista dei barbieri autorizzati per questo salone
+
       match /staff/{staffId} {
         allow read: if isAuthenticated();
-        allow write: if false; // Gestibile solo da te (Admin Globale) via console o script Node.js
+        allow write: if false; // Solo Admin
       }
     }
 
