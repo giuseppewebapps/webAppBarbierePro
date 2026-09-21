@@ -689,7 +689,6 @@ export default function CustomerBooking({
     setLoading(true);
     
     const totalDuration = selectedServices.reduce((acc, s) => acc + s.duration, 0);
-    const minDuration = selectedServices.reduce((acc, s) => acc + Math.max(s.duration - (s.flexibility || 0), 0), 0);
     const totalAmount = selectedServices.reduce((acc, s) => acc + s.price, 0);
     
     const dayStart = startOfDay(selectedSlot);
@@ -795,12 +794,7 @@ export default function CustomerBooking({
       const obstacleTime = nextApp && isBefore(nextApp.startTime.toDate(), shiftEnd) ? nextApp.startTime.toDate() : shiftEnd;
       
       const availableMins = (obstacleTime.getTime() - selectedSlot.getTime()) / 60000;
-      // 🔧 Durata nominale quando c'è spazio; compressione alla durata MINIMA
-      // (non all'availableMins arbitrario) solo quando lo spazio è limitato.
-      // Evita durate non standard (es. 50 min) e buchi collegati.
-      const actualDuration = availableMins >= totalDuration
-        ? totalDuration
-        : (availableMins >= minDuration ? minDuration : availableMins);
+      const actualDuration = Math.min(totalDuration, availableMins);
       const endTime = addMinutes(selectedSlot, actualDuration);
 
       const qCancelled = query(
