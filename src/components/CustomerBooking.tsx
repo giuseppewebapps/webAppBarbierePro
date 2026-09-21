@@ -689,6 +689,7 @@ export default function CustomerBooking({
     setLoading(true);
     
     const totalDuration = selectedServices.reduce((acc, s) => acc + s.duration, 0);
+    const minDuration = selectedServices.reduce((acc, s) => acc + Math.max(s.duration - (s.flexibility || 0), 0), 0);
     const totalAmount = selectedServices.reduce((acc, s) => acc + s.price, 0);
     
     const dayStart = startOfDay(selectedSlot);
@@ -794,7 +795,18 @@ export default function CustomerBooking({
       const obstacleTime = nextApp && isBefore(nextApp.startTime.toDate(), shiftEnd) ? nextApp.startTime.toDate() : shiftEnd;
       
       const availableMins = (obstacleTime.getTime() - selectedSlot.getTime()) / 60000;
-      const actualDuration = Math.min(totalDuration, availableMins);
+      // 🔧 Durata SEMPRE nominale o compressa al minimo (D_min): mai intermedia.
+      // - buco ≥ nominale → nominale (niente FLEX dove non serve)
+      // - D_min ≤ buco < nominale → compressa (FLEX)
+      // - buco < D_min → slot non proponibile (race condition): blocca come slot rubato
+      const actualDuration = availableMins >= totalDuration
+        ? totalDuration
+        : (availableMins >= minDuration ? minDuration : 0);
+      if (actualDuration === 0) {
+        alert("Prenotazione non riuscita: l'orario richiesto è stato appena prenotato da qualcun altro. La pagina verrà ricaricata.");
+        window.location.reload();
+        return;
+      }
       const endTime = addMinutes(selectedSlot, actualDuration);
 
       const qCancelled = query(
