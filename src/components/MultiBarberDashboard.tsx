@@ -114,7 +114,21 @@ export default function MultiBarberDashboard({ selectedAppointmentId, selectedNo
       const appWithProfiles = await Promise.all(docs.map(async (app) => {
         try {
           const userDoc = app.customerId !== 'manual_entry' ? await getDoc(doc(db, 'users', app.customerId)) : null;
-          return { ...app, staffId: !app.staffId ? ownerId : app.staffId, customer: userDoc?.exists() ? userDoc.data() as UserProfile : app.customer };
+          if (userDoc?.exists()) {
+            const profile = userDoc.data() as UserProfile;
+            // 🔧 Priorità ai contatti DELL'APPUNTAMENTO (nome/telefono/email corretti
+            // dal barbiere nel modal di dettaglio): la enrichment precedente
+            // SOVRASCRIVEVA customer con il profilo utente, facendo sembrare
+            // il salvataggio fallito. Il profilo completa solo i campi mancanti
+            // (uid, role, ecc.).
+            return { ...app, staffId: !app.staffId ? ownerId : app.staffId, customer: {
+              ...profile,
+              displayName: app.customer?.displayName || profile.displayName,
+              phoneNumber: app.customer?.phoneNumber || profile.phoneNumber,
+              email: app.customer?.email || profile.email
+            }};
+          }
+          return { ...app, staffId: !app.staffId ? ownerId : app.staffId, customer: app.customer };
         } catch { return app; }
       }));
       setAppointments(appWithProfiles);
@@ -122,6 +136,15 @@ export default function MultiBarberDashboard({ selectedAppointmentId, selectedNo
     });
     return () => unsubscribe();
   }, [tenantId, staffMembers]);
+
+  // 🔄 Live refresh del modal: se l'appuntamento aperto cambia (es. salvataggio
+  // nome/telefono dal modal stesso), sincronizza il riferimento con lo snapshot
+  // fresco così il modal mostra subito il dato salvato senza chiudere e riaprire.
+  useEffect(() => {
+    if (!selectedAppointment) return;
+    const fresh = appointments.find(a => a.id === selectedAppointment.id);
+    if (fresh && fresh !== selectedAppointment) setSelectedAppointment(fresh);
+  }, [appointments]);
 
   useEffect(() => {
     if (selectedAppointmentId && appointments.length > 0) {
