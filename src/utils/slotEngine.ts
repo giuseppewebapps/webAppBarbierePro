@@ -94,7 +94,6 @@ export function calculateOptimalSlots(
 ): Date[] {
   const validSlots: Date[] = [];
   
-  const M_min = Math.min(...catalog.map(s => s.duration - s.flexibility));
   const D_req = requestedService.duration;
   const D_min_req = requestedService.duration - requestedService.flexibility;
 
@@ -141,6 +140,13 @@ export function calculateOptimalSlots(
     });
   }
 
+  // 🚀 FALLBACK BUCI ESATTI (micro-servizi < 30 min): traccia se esiste almeno
+  // uno slot d'estremo turno libero; in caso contrario, i buchi che riempiono
+  // ESATTAMENTE la durata del servizio (residuo 0 ai due lati) diventano
+  // prenotabili — non sfasano le fasce orarie.
+  const exactHoleWindows: typeof freeWindows = [];
+  let foundExtremeSlot = false;
+
   // 3. Analisi e Iterazione
   for (const window of freeWindows) {
     if (window.length < D_min_req) continue;
@@ -171,6 +177,14 @@ export function calculateOptimalSlots(
         const L_rem_after = (window.end.getTime() - slotEnd.getTime()) / 60000;
 
         const isCompressing = dur < D_req;
+
+        // 🚀 FLEX solo se il buco è più corto della durata nominale:
+        // dove la nominale entra fisicamente si prenota sempre la durata piena (mai compressa).
+        // Elimina i FLEX abusivi in buchi ampi (es. buco 75 min che ospita il servizio da 60).
+        if (isCompressing && window.length >= D_req) {
+          continue;
+        }
+
         if (isCompressing) {
           const touchesPrev = slotStart.getTime() === window.start.getTime();
           const touchesNext = slotEnd.getTime() === window.end.getTime();
@@ -180,16 +194,23 @@ export function calculateOptimalSlots(
           }
         }
 
-        const minGapAllowed = window.length > 120 ? 30 : M_min;
-
-        if ((L_rem_before > 0 && L_rem_before < minGapAllowed) || (L_rem_after > 0 && L_rem_after < minGapAllowed)) {
-          continue; 
-        }
+        // 🚀 RILASSAMENTO NOMINALE: rimosso il vecchio gap-check sui residui
+        // (minGap 30/M_min). Un residuo diventa una finestra libera separata,
+        // riempibile dai servizi brevi — niente più buchi "morti" 31-44 / 61-74 min.
+        // L_rem_* restano calcolate per lo shield dei servizi 30 min qui sotto.
 
         if (D_req < 30) {
           const isAtShiftStart = slotStart.getTime() === shift.start.getTime();
           const isAtShiftEnd = slotEnd.getTime() === shift.end.getTime();
-          if (!isAtShiftStart && !isAtShiftEnd) continue;
+          if (isAtShiftStart || isAtShiftEnd) {
+            foundExtremeSlot = true;
+          } else {
+            // Candidato "buco esatto": finestra lunga ESATTAMENTE D_req, dalla sua prima posizione
+            if (window.length === D_req && slotStart.getTime() === window.start.getTime()) {
+              exactHoleWindows.push(window);
+            }
+            continue;
+          }
         } else {
           let shieldActivated = false;
           
@@ -242,6 +263,14 @@ export function calculateOptimalSlots(
       //   istanza successiva.
       const scanStep = 15;
       slotStart = addMinutes(slotStart, scanStep);
+    }
+  }
+
+  // 🚀 FALLBACK: nessuno slot d'estremo turno libero → i buchi esatti diventano prenotabili
+  if (D_req < 30 && !isManualBooking && !allowEverySlot && !foundExtremeSlot) {
+    for (const window of exactHoleWindows) {
+      if (window.prevCompressed || window.nextCompressed) continue;
+      validSlots.push(new Date(window.start));
     }
   }
 

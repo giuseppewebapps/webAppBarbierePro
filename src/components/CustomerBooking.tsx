@@ -795,12 +795,18 @@ export default function CustomerBooking({
       const obstacleTime = nextApp && isBefore(nextApp.startTime.toDate(), shiftEnd) ? nextApp.startTime.toDate() : shiftEnd;
       
       const availableMins = (obstacleTime.getTime() - selectedSlot.getTime()) / 60000;
-      // 🔧 Durata nominale quando c'è spazio; compressione alla durata MINIMA
-      // (non all'availableMins arbitrario) solo quando lo spazio è limitato.
-      // Evita durate non standard (es. 50 min) e buchi collegati.
+      // 🔧 Durata SEMPRE nominale o compressa al minimo (D_min): mai intermedia.
+      // - buco ≥ nominale → nominale (niente FLEX dove non serve)
+      // - D_min ≤ buco < nominale → compressa (FLEX)
+      // - buco < D_min → slot non proponibile (race condition): blocca come slot rubato
       const actualDuration = availableMins >= totalDuration
         ? totalDuration
-        : (availableMins >= minDuration ? minDuration : availableMins);
+        : (availableMins >= minDuration ? minDuration : 0);
+      if (actualDuration === 0) {
+        alert("Prenotazione non riuscita: l'orario richiesto è stato appena prenotato da qualcun altro. La pagina verrà ricaricata.");
+        window.location.reload();
+        return;
+      }
       const endTime = addMinutes(selectedSlot, actualDuration);
 
       const qCancelled = query(

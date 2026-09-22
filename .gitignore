@@ -12,3 +12,4 @@ agenda.ics
 migrations/
 service-account.json
 seed-demo.cjs
+test_out/
