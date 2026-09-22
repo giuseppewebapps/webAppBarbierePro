@@ -872,7 +872,7 @@ export default function CustomerBooking({
       
       // Notifiche
       try {
-        const barberSnapshot = await getDocs(query(collection(db, 'users'), where('role', '==', 'barber')));
+        const barberSnapshot = await getDocs(query(collection(db, 'salons', tenantId, 'staff'), where('active', '==', true)));
         for (const barberDoc of barberSnapshot.docs) {
           await addDoc(collection(db, 'salons', tenantId, 'notifications'), {
             userId: barberDoc.id,
@@ -959,7 +959,7 @@ export default function CustomerBooking({
         cancelledBy: 'customer'
       });
 
-      const barberSnapshot = await getDocs(query(collection(db, 'users'), where('role', '==', 'barber')));
+      const barberSnapshot = await getDocs(query(collection(db, 'salons', tenantId, 'staff'), where('active', '==', true)));
       
       for (const barberDoc of barberSnapshot.docs) {
         await addDoc(collection(db, 'salons', tenantId, 'notifications'), {
@@ -1093,7 +1093,7 @@ export default function CustomerBooking({
           }
         }
         
-        const barberSnapshot = await getDocs(query(collection(db, 'users'), where('role', '==', 'barber')));
+        const barberSnapshot = await getDocs(query(collection(db, 'salons', tenantId, 'staff'), where('active', '==', true)));
         for (const barberDoc of barberSnapshot.docs) {
           await addDoc(collection(db, 'salons', tenantId, 'notifications'), {
             userId: barberDoc.id,
@@ -1179,7 +1179,7 @@ export default function CustomerBooking({
             ? myApp?.friendDetails?.phone 
             : (myApp?.customer?.phoneNumber || profile?.phoneNumber || '');
 
-          const barberSnapshot = await getDocs(query(collection(db, 'users'), where('role', '==', 'barber')));
+          const barberSnapshot = await getDocs(query(collection(db, 'salons', tenantId, 'staff'), where('active', '==', true)));
           for (const barberDoc of barberSnapshot.docs) {
             await addDoc(collection(db, 'salons', tenantId, 'notifications'), {
               userId: barberDoc.id,

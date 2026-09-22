@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { collection, addDoc, query, where, getDocs, Timestamp, onSnapshot, doc, updateDoc, deleteDoc, limit, setDoc } from 'firebase/firestore';
+import { collection, addDoc, query, where, getDocs, Timestamp, onSnapshot, doc, updateDoc, deleteDoc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../context/AuthContext';
 import { useSalonSettings } from '../hooks/useSalonSettings';
@@ -257,10 +257,10 @@ export default function ManualBookingModal({ onClose, onSuccess }: ManualBooking
     const endTime = addMinutes(selectedSlot, totalDuration);
 
     try {
-      const usersRef = collection(db, 'users');
-      const userQuery = query(usersRef, where('phoneNumber', '==', `+39${purePhone}`), limit(1));
-      const userSnapshot = await getDocs(userQuery);
-      const finalCustomerId = userSnapshot.empty ? 'manual_entry' : userSnapshot.docs[0].id;
+      // Le regole Firestore vietano la lettura dell anagrafica utenti (anti-enumerazione):
+      // l appuntamento nasce come "manual_entry" e viene agganciato al cliente al suo
+      // prossimo accesso dall auto-link (per telefono o email).
+      const finalCustomerId = 'manual_entry';
 
       await setDoc(doc(db, 'salons', tenantId, 'contacts', purePhone), {
         firstName, lastName, firstNameLower: firstName.toLowerCase(), lastNameLower: lastName.toLowerCase(),

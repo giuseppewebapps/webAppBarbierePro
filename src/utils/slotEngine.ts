@@ -253,11 +253,15 @@ export function calculateOptimalSlots(
         validSlots.push(new Date(slotStart));
       }
 
-      // 🚀 CADENZA DINAMICA DEGLI SLOT:
-      // - Servizio FLESSIBILE (flexibility > 0) → griglia fissa di 15 minuti (per sfruttare gli incastri)
-      // - Servizio RIGIDO (flexibility = 0) → slot distanziati della durata nominale del servizio
-      //   (es. servizio da 20 min → proposte ogni 20 minuti, a partire dall'inizio di ogni finestra libera)
-      const scanStep = requestedService.flexibility > 0 ? 15 : Math.max(D_req, 1);
+      // 🚀 CADENZA FISSA DEGLI SLOT:
+      // - Griglia fissa di 15 minuti per TUTTI i servizi
+      //   (rigidi e flessibili). Lo scanStep di 15 garantisce che
+      //   nessun minuto disponibile venga saltato, evitando buchi
+      //   in finestre libere create da appuntamenti flessibili compressi.
+      //   Un servizio rigido (es. 20min) può comunque essere proposto
+      //   ogni 15 minuti perché non si sovrappone mai a una sua
+      //   istanza successiva.
+      const scanStep = 15;
       slotStart = addMinutes(slotStart, scanStep);
     }
   }
