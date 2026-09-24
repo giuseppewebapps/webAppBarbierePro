@@ -15,6 +15,7 @@ import {
 import { db, auth } from '../firebase';
 import { useAuth } from '../context/AuthContext';
 import { notifySystemByEmail } from '../utils/emailNotifier';
+import { syncBusyBlock, removeBusyBlock } from '../utils/busyBlocks';
 import { useSalonSettings } from '../hooks/useSalonSettings';
 import { 
   format, 
@@ -820,6 +821,8 @@ export default function CustomerBooking({
         const cancelledSnapshot = await getDocs(qCancelled);
         for (const d of cancelledSnapshot.docs) {
           await deleteDoc(doc(db, 'salons', tenantId, 'appointments', d.id));
+          // Fase 1b: senza appuntamento non c'e occupazione da dichiarare
+          await removeBusyBlock(tenantId, d.id);
         }
       } catch (err) {
         console.warn("Could not clean up cancelled appointments:", err);
@@ -869,6 +872,9 @@ export default function CustomerBooking({
       }
 
       const appointmentRef = await addDoc(collection(db, 'salons', tenantId, 'appointments'), appointmentData);
+
+      // Fase 1b: indice sanificato degli orari occupati (i clienti lo leggono per calcolare gli slot)
+      await syncBusyBlock(tenantId, appointmentRef.id, appointmentData);
       
       // Notifiche
       try {
@@ -958,6 +964,9 @@ export default function CustomerBooking({
         cancelledAt: Timestamp.now(),
         cancelledBy: 'customer'
       });
+
+      // Fase 1b: l'appuntamento cancellato non occupa piu l'agenda
+      await removeBusyBlock(tenantId, app.id!);
 
       const barberSnapshot = await getDocs(query(collection(db, 'salons', tenantId, 'staff'), where('active', '==', true)));
       
@@ -1085,9 +1094,20 @@ export default function CustomerBooking({
         }
         await updateDoc(doc(db, 'salons', tenantId, 'appointments', currentTarget.appointmentId), updatePayload);
 
+        // Fase 1b: il blocco di occupazione si sposta insieme all'appuntamento
+        await syncBusyBlock(tenantId, currentTarget.appointmentId, {
+          staffId: updatePayload.staffId || myApp?.staffId || null,
+          startTime: updatePayload.startTime,
+          endTime: updatePayload.endTime,
+          services: myApp?.services,
+          status: 'booked',
+        });
+
         if (freshProposal.gapAppointmentId) {
           try {
             await deleteDoc(doc(db, 'salons', tenantId, 'appointments', freshProposal.gapAppointmentId));
+            // Fase 1b: anche il buco consumato non deve restare appuntato sull'agenda
+            await removeBusyBlock(tenantId, freshProposal.gapAppointmentId);
           } catch (e) {
             console.warn("Gap appointment delete skipped:", e);
           }

@@ -138,6 +138,28 @@ service cloud.firestore {
         );
       }
 
+      // ==========================================
+      // busyBlocks (Fase 1b): indice SANIFICATO degli orari occupati.
+      // Contiene SOLO staffId + orari: nessun nome, telefono, email o importo.
+      // Permette al cliente di calcolare gli slot liberi senza leggere
+      // `appointments` (che contiene i dati personali dei clienti).
+      // ==========================================
+      function isValidBusyBlock(data) {
+        return data.keys().hasAll(['staffId', 'start', 'end'])
+               && (data.staffId == null || (data.staffId is string && isTenantStaff(data.staffId)))
+               && data.start is timestamp
+               && data.end is timestamp
+               && data.start < data.end;
+      }
+
+      match /busyBlocks/{blockId} {
+        // Sola occupazione della agenda: nessun dato personale da proteggere.
+        allow read: if isAuthenticated();
+        allow create, update: if isAuthenticated() && isValidBusyBlock(request.resource.data);
+        // Il cliente elimina il blocco quando cancella il proprio appuntamento.
+        allow delete: if isAuthenticated();
+      }
+
       match /notifications/{notificationId} {
         allow read, update, delete: if isAuthenticated() && (resource.data.userId == request.auth.uid || isSalonStaff());
         // Il cliente puo notificare SOLO lo staff di questo salone; lo staff chiunque.

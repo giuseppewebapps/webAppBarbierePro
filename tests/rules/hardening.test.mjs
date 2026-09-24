@@ -223,3 +223,67 @@ test('un cliente NON puo scrivere le impostazioni del salone', async function ()
   const db = testEnv.authenticatedContext(CUSTOMER).firestore();
   await assertFails(setDoc(doc(db, 'salons/tenantA/settings/public'), { name: 'hack' }, { merge: true }));
 });
+
+// ---------------- busyBlocks (Fase 1b): indice sanificato degli orari occupati ----------------
+function busyBlock(overrides) {
+  return Object.assign({
+    staffId: null,
+    start: start,
+    end: end,
+    nominalMinutes: 30,
+    updatedAt: now,
+  }, overrides || {});
+}
+
+test('il cliente legge i busyBlocks del salone (serve a calcolare gli slot)', async function () {
+  const db = testEnv.authenticatedContext(CUSTOMER).firestore();
+  await assertSucceeds(getDocs(collection(db, 'salons/tenantA/busyBlocks')));
+});
+
+test('un anonimo NON legge i busyBlocks', async function () {
+  const db = testEnv.unauthenticatedContext().firestore();
+  await assertFails(getDocs(collection(db, 'salons/tenantA/busyBlocks')));
+});
+
+test('un anonimo NON crea blocchi di occupazione', async function () {
+  const db = testEnv.unauthenticatedContext().firestore();
+  await assertFails(setDoc(doc(db, 'salons/tenantA/busyBlocks/anon'), busyBlock({})));
+});
+
+test('il cliente crea il blocco del proprio appuntamento', async function () {
+  const db = testEnv.authenticatedContext(CUSTOMER).firestore();
+  await assertSucceeds(setDoc(doc(db, 'salons/tenantA/busyBlocks/appNuovo'), busyBlock({})));
+});
+
+test('il cliente aggiorna il blocco dopo uno spostamento accettato', async function () {
+  const db = testEnv.authenticatedContext(CUSTOMER).firestore();
+  await assertSucceeds(setDoc(doc(db, 'salons/tenantA/busyBlocks/appNuovo'), busyBlock({
+    start: Timestamp.fromDate(new Date('2026-10-01T11:00:00Z')),
+    end: Timestamp.fromDate(new Date('2026-10-01T11:30:00Z')),
+  })));
+});
+
+test('il cliente elimina il blocco quando cancella il proprio appuntamento', async function () {
+  const db = testEnv.authenticatedContext(CUSTOMER).firestore();
+  await assertSucceeds(deleteDoc(doc(db, 'salons/tenantA/busyBlocks/appNuovo')));
+});
+
+test('lo staff crea un blocco con il proprio staffId', async function () {
+  const db = testEnv.authenticatedContext(STAFF_A).firestore();
+  await assertSucceeds(setDoc(doc(db, 'salons/tenantA/busyBlocks/appStaff'), busyBlock({ staffId: STAFF_A })));
+});
+
+test('un blocco con staffId di un altro salone viene rifiutato', async function () {
+  const db = testEnv.authenticatedContext(CUSTOMER).firestore();
+  await assertFails(setDoc(doc(db, 'salons/tenantA/busyBlocks/hackStaff'), busyBlock({ staffId: STAFF_B })));
+});
+
+test('un blocco con orari incoerenti viene rifiutato', async function () {
+  const db = testEnv.authenticatedContext(CUSTOMER).firestore();
+  await assertFails(setDoc(doc(db, 'salons/tenantA/busyBlocks/hackTimes'), busyBlock({ start: end, end: start })));
+});
+
+test('un blocco senza orari viene rifiutato', async function () {
+  const db = testEnv.authenticatedContext(CUSTOMER).firestore();
+  await assertFails(setDoc(doc(db, 'salons/tenantA/busyBlocks/incompleto'), { staffId: null, nominalMinutes: 30 }));
+});
