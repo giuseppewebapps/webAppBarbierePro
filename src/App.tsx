@@ -32,7 +32,7 @@ import CustomerBooking from './components/CustomerBooking';
 import { LogOut, Scissors, Plus, Clock as ClockIcon, Phone } from 'lucide-react';
 import NotificationBell from './components/NotificationBell';
 import { autoLinkAppointments } from './utils/appointmentLinker';
-import { logSystemError } from './utils/logger';
+import { logSystemError, logPermissionDenied } from './utils/logger';
 import { getTenantId } from './utils/tenantResolver';
 import { AuthContext } from './context/AuthContext';
 import { useSalonSettings } from './hooks/useSalonSettings';
@@ -60,6 +60,18 @@ export default function App() {
 
   // Nome dello staff loggato (owner/barbiere) per l'header — fallback a profile.displayName
   const staffName = useCurrentStaff(tenantId, profile?.uid, profile?.role === 'barber');
+
+  // Watchdog: quando un dispositivo viene bloccato dalle regole Firestore scriviamo
+  // una riga in `system_logs` (visibile con `node migrations/checkLogs.cjs`).
+  // Serve a sapere da remoto se qualche telefono sta sbattendo contro le regole:
+  // senza questo, l'errore resta solo nella console del browser.
+  useEffect(() => {
+    const onRejection = (event: PromiseRejectionEvent) => {
+      void logPermissionDenied(tenantId, event.reason, 'unhandledrejection');
+    };
+    window.addEventListener('unhandledrejection', onRejection);
+    return () => window.removeEventListener('unhandledrejection', onRejection);
+  }, [tenantId]);
 
   const [name, setName] = useState('');
   const [phoneNumber, setPhoneNumber] = useState('');
