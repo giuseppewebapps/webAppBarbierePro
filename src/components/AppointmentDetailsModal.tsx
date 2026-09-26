@@ -7,6 +7,7 @@ import { it } from 'date-fns/locale';
 import { XCircle, Phone, ChevronRight, Send, Scissors, Check, Users, ArrowUpCircle, Settings, Globe, AlertCircle } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { WhatsAppButton } from './WhatsAppButton';
+import { syncBusyBlock } from '../utils/busyBlocks';
 
 interface Props {
   appointment: Appointment & { customer?: UserProfile };
@@ -179,6 +180,14 @@ export default function AppointmentDetailsModal({
       await updateDoc(doc(db, 'salons', tenantId, 'appointments', appointment.id!), { 
         staffId: newStaffId, 
         updatedAt: Timestamp.now() 
+      });
+      // Fase 1b: il blocco di occupazione segue il cambio di barbiere
+      await syncBusyBlock(tenantId, appointment.id!, {
+        staffId: newStaffId,
+        startTime: appointment.startTime,
+        endTime: appointment.endTime,
+        services: appointment.services,
+        status: appointment.status,
       });
       setAssignedStaffId(newStaffId);
     } catch (error) {

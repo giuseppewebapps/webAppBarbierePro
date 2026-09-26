@@ -13,6 +13,7 @@ import { Appointment, SpecialDay, TimeRange, StaffProfile } from '../types';
 import { calculateMultiStaffSlots, Shift as SlotShift } from '../utils/slotEngine';
 import { generateWhatsAppLink } from '../utils/whatsapp';
 import { logSystemError } from '../utils/logger';
+import { syncBusyBlock } from '../utils/busyBlocks';
 
 interface ManualBookingModalProps {
   onClose: () => void;
@@ -279,6 +280,15 @@ export default function ManualBookingModal({ onClose, onSuccess }: ManualBooking
         totalAmount,
         createdAt: Timestamp.now(),
         isManual: true
+      });
+
+      // Fase 1b: indice sanificato degli orari occupati
+      await syncBusyBlock(tenantId, newAppRef.id, {
+        staffId: selectedStaffId || null,
+        startTime: Timestamp.fromDate(selectedSlot),
+        endTime: Timestamp.fromDate(endTime),
+        services: selectedServices,
+        status: 'booked',
       });
 
       if (sendWhatsApp) {

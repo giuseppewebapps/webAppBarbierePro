@@ -11,6 +11,7 @@ import { useAuth } from '../context/AuthContext';
 import { useSalonSettings } from '../hooks/useSalonSettings';
 import { useIsOwner } from '../hooks/useIsOwner';
 import { generateWhatsAppLink } from '../utils/whatsapp';
+import { removeBusyBlock } from '../utils/busyBlocks';
 import { cn } from '../lib/utils';
 
 interface Props {
@@ -182,6 +183,9 @@ export default function MultiBarberDashboard({ selectedAppointmentId, selectedNo
         cancelledAt: Timestamp.now(),
         cancelledBy: 'barber'
       });
+
+      // Fase 1b: libera l'agenda
+      await removeBusyBlock(tenantId, app.id!);
       if (app.customerId !== profile?.uid && app.customerId !== 'manual_entry') {
         await addDoc(collection(db, 'salons', tenantId, 'notifications'), {
           userId: app.customerId, title: 'Appuntamento Annullato',
