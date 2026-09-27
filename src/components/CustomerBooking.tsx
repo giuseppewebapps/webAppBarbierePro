@@ -15,7 +15,7 @@ import {
 import { db, auth } from '../firebase';
 import { useAuth } from '../context/AuthContext';
 import { notifySystemByEmail } from '../utils/emailNotifier';
-import { syncBusyBlock, removeBusyBlock } from '../utils/busyBlocks';
+import { syncBusyBlock, removeBusyBlock, fetchBusyBlocks } from '../utils/busyBlocks';
 import { useSalonSettings } from '../hooks/useSalonSettings';
 import { 
   format, 
@@ -248,14 +248,8 @@ export default function CustomerBooking({
         const windowStartMs = startOfDay(visibleDays[0]);
         const windowEndMs = endOfDay(visibleDays[visibleDays.length - 1]);
 
-        const q = query(
-          collection(db, 'salons', tenantId, 'appointments'),
-          where('startTime', '>=', Timestamp.fromDate(windowStartMs)),
-          where('startTime', '<=', Timestamp.fromDate(windowEndMs)),
-          where('status', '==', 'booked')
-        );
-        const snap = await getDocs(q);
-        const windowApps = snap.docs.map(doc => doc.data() as Appointment);
+        // Fase 1b: l'occupazione arriva dall'indice sanificato (nessun dato personale)
+        const windowApps = await fetchBusyBlocks(tenantId, windowStartMs, windowEndMs);
 
         const mappedCatalog = salonSettings.services.map(s => ({
           id: s.id,
@@ -556,15 +550,8 @@ export default function CustomerBooking({
     const dateAvailableStaff = availableStaffForDate(dateString, staffMembers);
 
     try {
-      const q = query(
-        collection(db, 'salons', tenantId, 'appointments'),
-        where('startTime', '>=', Timestamp.fromDate(dayStart)),
-        where('startTime', '<=', Timestamp.fromDate(dayEnd))
-      );
-      const snapshot = await getDocs(q);
-      const dayAppointments = snapshot.docs
-        .map(doc => doc.data() as Appointment)
-        .filter(app => app.status === 'booked');
+      // Fase 1b: occupazione dall'indice sanificato (i blocchi esistono solo per appuntamenti attivi)
+      const dayAppointments = await fetchBusyBlocks(tenantId, dayStart, dayEnd);
 
       const mappedCatalog = salonSettings.services.map(s => ({
         id: s.id,
@@ -697,14 +684,9 @@ export default function CustomerBooking({
     const dayEnd = endOfDay(selectedSlot);
 
    try {
-      const qDay = query(
-        collection(db, 'salons', tenantId, 'appointments'),
-        where('startTime', '>=', Timestamp.fromDate(dayStart)),
-        where('startTime', '<=', Timestamp.fromDate(dayEnd)),
-        where('status', '==', 'booked')
-      );
-      const daySnap = await getDocs(qDay);
-      const dayApps = daySnap.docs.map(d => d.data() as Appointment).sort((a, b) => a.startTime.toMillis() - b.startTime.toMillis());
+      // Fase 1b: occupazione dall'indice sanificato
+      const dayApps = (await fetchBusyBlocks(tenantId, dayStart, dayEnd))
+        .sort((a: any, b: any) => a.startTime.toMillis() - b.startTime.toMillis());
 
       // 🚀 PROTEZIONE SOVRAPPOSIZIONI CON RE-CHECK MATRICIALE
       const mappedCatalog = salonSettings.services.map(s => ({
@@ -1050,21 +1032,19 @@ export default function CustomerBooking({
         // Barbiere di destinazione: quello del buco se proposto, altrimenti quello originario
         const targetStaffId = currentTarget.proposedStaffId || myApp.staffId || undefined;
 
-        const conflictQuery = query(
-          collection(db, 'salons', tenantId, 'appointments'),
-          where('status', '==', 'booked'),
-          where('startTime', '<', Timestamp.fromDate(newEndTime)),
-          where('endTime', '>', Timestamp.fromDate(newStartTime))
-        );
-        const conflictSnap = await getDocs(conflictQuery);
-        // Filtra considerando la colonna del barbiere target (il buco scelto dal barbiere)
-        const realConflicts = conflictSnap.docs.filter(d => {
-          if (d.id === currentTarget.appointmentId) return false;
-          const conflictApp = d.data() as Appointment;
+        // Fase 1b: conflitti calcolati sull'indice sanificato.
+        // Finestra a ritroso di 12h per non perdere un appuntamento iniziato prima.
+        const windowFrom = new Date(newStartTime.getTime() - 12 * 3600 * 1000);
+        const conflictBlocks = await fetchBusyBlocks(tenantId, windowFrom, newEndTime);
+        const realConflicts = conflictBlocks.filter((b: any) => {
+          if (b.id === currentTarget.appointmentId) return false;
+          const bStart = b.startTime.toDate().getTime();
+          const bEnd = b.endTime.toDate().getTime();
+          if (!(bStart < newEndTime.getTime() && bEnd > newStartTime.getTime())) return false;
           // Senza barbiere target noto (dataset legacy): blocco solo se anche il sovrapposto è senza staffId
-          if (!targetStaffId) return !conflictApp.staffId;
+          if (!targetStaffId) return !b.staffId;
           // Con barbiere target noto: conflitto SOLO se è proprio la colonna del barbiere di destinazione
-          return !!conflictApp.staffId && conflictApp.staffId === targetStaffId;
+          return !!b.staffId && b.staffId === targetStaffId;
         });
         
         if (realConflicts.length > 0) {
